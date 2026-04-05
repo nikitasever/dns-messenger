@@ -622,12 +622,16 @@ async function initOutgoingCall(peer, video) {
             video: video,
         });
     } catch (e) {
-        if (location.protocol === 'http:' && location.hostname !== 'localhost') {
-            toast('Microphone/camera requires HTTPS. Restart server without --no-ssl and open https://' + location.host, 'error');
-        } else {
-            toast('Cannot access microphone/camera: ' + e.message, 'error');
-        }
+        showMediaError('calls');
         cleanupCall();
+    }
+}
+
+function showMediaError(feature) {
+    if (location.protocol === 'http:' && location.hostname !== 'localhost') {
+        toast(`Chrome requires HTTPS for ${feature}. Open https://${location.host} and accept the certificate`, 'error');
+    } else {
+        toast('Allow microphone/camera access in browser settings', 'error');
     }
 }
 
@@ -698,11 +702,7 @@ async function acceptCall(video) {
         callState.pendingOffer = null;
 
     } catch (e) {
-        if (location.protocol === 'http:' && location.hostname !== 'localhost') {
-            toast('Microphone/camera requires HTTPS. Open https://' + location.host, 'error');
-        } else {
-            toast('Cannot access microphone/camera: ' + e.message, 'error');
-        }
+        showMediaError('calls');
         cleanupCall();
     }
 }
@@ -870,11 +870,7 @@ async function startVoiceRecord() {
         showRecordingIndicator();
 
     } catch (e) {
-        if (location.protocol === 'http:' && location.hostname !== 'localhost') {
-            toast('Microphone requires HTTPS. Open https://' + location.host, 'error');
-        } else {
-            toast('Cannot access microphone: ' + e.message, 'error');
-        }
+        showMediaError('voice messages');
     }
 }
 

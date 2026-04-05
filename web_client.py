@@ -359,6 +359,36 @@ def update_last_seen(username: str):
         last_seen[username] = time.time()
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Offline message buffer — stores messages while user's socket is disconnected
+# ═══════════════════════════════════════════════════════════════════════
+
+msg_buffer_lock = threading.Lock()
+msg_buffer: dict[str, list] = {}          # username → [{'event': ..., 'data': ...}]
+online_sockets: dict[str, int] = {}       # username → connected socket count
+
+
+def buffer_or_emit(event: str, data: dict, username: str):
+    """Emit to user if online, otherwise buffer for later delivery."""
+    with msg_buffer_lock:
+        if online_sockets.get(username, 0) > 0:
+            socketio.emit(event, data, room=username)
+        else:
+            if username not in msg_buffer:
+                msg_buffer[username] = []
+            # Keep max 500 buffered messages per user
+            if len(msg_buffer[username]) < 500:
+                msg_buffer[username].append({'event': event, 'data': data})
+
+
+def flush_buffer(username: str):
+    """Send all buffered messages to user."""
+    with msg_buffer_lock:
+        buf = msg_buffer.pop(username, [])
+    for item in buf:
+        socketio.emit(item['event'], item['data'], room=username)
+
+
 def get_messenger() -> UserMessenger | None:
     username = session.get('username')
     if not username:
@@ -376,12 +406,12 @@ def start_poll_loop(m: UserMessenger):
         while m.running:
             try:
                 for msg in m.poll_dm():
-                    socketio.emit('message', msg, room=m.username)
+                    buffer_or_emit('message', msg, m.username)
                 for gid in list(m.group_keys):
                     for msg in m.poll_group(gid):
-                        socketio.emit('message', msg, room=m.username)
+                        buffer_or_emit('message', msg, m.username)
                 for finfo in m.poll_files():
-                    socketio.emit('file', finfo, room=m.username)
+                    buffer_or_emit('file', finfo, m.username)
                 m.poll_errors = 0
                 update_last_seen(m.username)
                 socketio.emit('status', {'connected': True}, room=m.username)
@@ -808,7 +838,21 @@ def on_connect():
     m = get_messenger()
     if m:
         join_room(m.username)
+        with msg_buffer_lock:
+            online_sockets[m.username] = online_sockets.get(m.username, 0) + 1
         emit('status', {'connected': True})
+        # Flush any buffered messages from while user was offline
+        flush_buffer(m.username)
+
+
+@socketio.on('disconnect')
+def on_disconnect():
+    m = get_messenger()
+    if m:
+        with msg_buffer_lock:
+            count = online_sockets.get(m.username, 1) - 1
+            online_sockets[m.username] = max(0, count)
+        update_last_seen(m.username)
 
 
 # ── WebRTC Call Signaling ───────────────────────────────────────────
