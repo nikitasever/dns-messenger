@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — DNS Messenger</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F6E1;</text></svg>">
+    <style>
+        :root { --bg: #0e1621; --card: #17212b; --input: #242f3d; --border: #1f2c3a; --text: #f5f5f5; --muted: #546778; --sec: #8696a7; --accent: #8774e1; --green: #4dcd5e; --red: #e05d5d; --orange: #e8a63a; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        .topbar { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; gap: 14px; }
+        .topbar h1 { font-size: 18px; flex: 1; }
+        .topbar .badge { font-size: 12px; color: var(--green); background: rgba(77,205,94,0.12); padding: 4px 12px; border-radius: 999px; }
+        .topbar button { background: none; border: 1px solid var(--border); color: var(--sec); padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: inherit; }
+        .topbar button:hover { color: var(--text); border-color: var(--sec); }
+        .container { max-width: 800px; margin: 24px auto; padding: 0 16px; }
+        .section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+        .section-title { padding: 14px 20px; font-size: 14px; font-weight: 600; color: var(--sec); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.5px; }
+        .user-row { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+        .user-row:last-child { border-bottom: none; }
+        .user-avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 16px; color: #fff; flex-shrink: 0; }
+        .user-info { flex: 1; }
+        .user-name { font-size: 15px; font-weight: 500; }
+        .user-tags { display: flex; gap: 6px; margin-top: 4px; }
+        .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 500; }
+        .tag.online { background: rgba(77,205,94,0.12); color: var(--green); }
+        .tag.registered { background: rgba(135,116,225,0.12); color: var(--accent); }
+        .tag.blocked { background: rgba(224,93,93,0.12); color: var(--red); }
+        .tag.anon { background: rgba(134,150,167,0.1); color: var(--sec); }
+        .user-actions { display: flex; gap: 6px; }
+        .user-actions button { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: none; color: var(--sec); font-size: 12px; font-family: inherit; font-weight: 500; cursor: pointer; }
+        .user-actions button:hover { border-color: var(--sec); color: var(--text); }
+        .user-actions button.danger { color: var(--red); }
+        .user-actions button.danger:hover { background: rgba(224,93,93,0.1); border-color: var(--red); }
+        .user-actions button.success { color: var(--green); }
+        .user-actions button.success:hover { background: rgba(77,205,94,0.1); border-color: var(--green); }
+        .empty { padding: 40px; text-align: center; color: var(--muted); }
+        .pw-section { padding: 20px; }
+        .pw-section input { padding: 10px 14px; background: var(--input); border: 1.5px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; width: 200px; margin-right: 8px; }
+        .pw-section input:focus { border-color: var(--accent); }
+        .pw-section button { padding: 10px 18px; background: var(--accent); border: none; border-radius: 8px; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+        .msg { font-size: 13px; margin-top: 8px; }
+        .msg.ok { color: var(--green); }
+        .msg.err { color: var(--red); }
+        .note { padding: 16px 20px; font-size: 13px; color: var(--muted); line-height: 1.5; border-top: 1px solid var(--border); }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <span style="font-size:24px">&#x1F6E1;</span>
+        <h1>Admin Panel</h1>
+        <span class="badge">DNS Messenger</span>
+        <button onclick="location.href='/'">Messenger</button>
+        <button onclick="doLogout()">Logout</button>
+    </div>
+
+    <div class="container">
+        <div class="section">
+            <div class="section-title">Users</div>
+            <div id="users-list"><div class="empty">Loading...</div></div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Change Admin Password</div>
+            <div class="pw-section">
+                <input type="password" id="new-pw" placeholder="New password (6+ chars)">
+                <button onclick="changePw()">Update</button>
+                <div class="msg" id="pw-msg"></div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="note">
+                &#x1F512; <strong>Privacy:</strong> Admin can manage accounts but cannot read private messages. All conversations are E2E encrypted — the server never sees plaintext.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const COLORS = [
+            ['#8774e1','#6c5bbf'],['#4dcd5e','#37a34a'],['#e05d5d','#b94545'],
+            ['#e8a63a','#c48a2e'],['#3ea6e1','#2d85b8'],['#e06bb0','#b8508f'],
+        ];
+        function hash(s) { let h=0; for(let i=0;i<s.length;i++) h=((h<<5)-h+s.charCodeAt(i))|0; return Math.abs(h); }
+        function color(n) { return COLORS[hash(n)%COLORS.length]; }
+
+        async function loadUsers() {
+            const res = await fetch('/api/admin/users').then(r=>r.json());
+            const el = document.getElementById('users-list');
+            if (!res.ok || !res.users.length) { el.innerHTML='<div class="empty">No users</div>'; return; }
+            el.innerHTML = '';
+            for (const u of res.users) {
+                const c = color(u.username);
+                const tags = [];
+                if (u.online) tags.push('<span class="tag online">online</span>');
+                if (u.registered) tags.push('<span class="tag registered">registered</span>');
+                else tags.push('<span class="tag anon">anonymous</span>');
+                if (u.blocked) tags.push('<span class="tag blocked">blocked</span>');
+
+                const actions = [];
+                if (u.blocked) {
+                    actions.push(`<button class="success" onclick="unblock('${u.username}')">Unblock</button>`);
+                } else {
+                    actions.push(`<button class="danger" onclick="block('${u.username}')">Block</button>`);
+                }
+                actions.push(`<button class="danger" onclick="del('${u.username}')">Delete</button>`);
+
+                const div = document.createElement('div');
+                div.className = 'user-row';
+                div.innerHTML = `
+                    <div class="user-avatar" style="background:linear-gradient(135deg,${c[0]},${c[1]})">${u.username[0].toUpperCase()}</div>
+                    <div class="user-info">
+                        <div class="user-name">${u.username}</div>
+                        <div class="user-tags">${tags.join('')}</div>
+                    </div>
+                    <div class="user-actions">${actions.join('')}</div>
+                `;
+                el.appendChild(div);
+            }
+        }
+
+        async function block(user) {
+            if (!confirm(`Block ${user}?`)) return;
+            await fetch('/api/admin/block', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:user}) });
+            loadUsers();
+        }
+
+        async function unblock(user) {
+            await fetch('/api/admin/unblock', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:user}) });
+            loadUsers();
+        }
+
+        async function del(user) {
+            if (!confirm(`Delete ${user}? This cannot be undone.`)) return;
+            await fetch('/api/admin/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:user}) });
+            loadUsers();
+        }
+
+        async function changePw() {
+            const pw = document.getElementById('new-pw').value;
+            const msg = document.getElementById('pw-msg');
+            const res = await fetch('/api/admin/change-password', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({password:pw})
+            }).then(r=>r.json());
+            msg.className = 'msg ' + (res.ok ? 'ok' : 'err');
+            msg.textContent = res.ok ? 'Password updated' : (res.error || 'Error');
+            if (res.ok) document.getElementById('new-pw').value = '';
+        }
+
+        async function doLogout() {
+            await fetch('/api/admin/logout', {method:'POST'});
+            location.reload();
+        }
+
+        loadUsers();
+    </script>
+</body>
+</html>

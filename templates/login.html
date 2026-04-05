@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DNS Messenger</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
+    <style>
+        :root {
+            --bg: #0e1621; --card: #17212b; --input: #242f3d; --border: #1f2c3a;
+            --text: #f5f5f5; --muted: #546778; --sec: #8696a7;
+            --accent: #8774e1; --accent-light: #a18ef5;
+            --green: #4dcd5e; --red: #e05d5d; --radius: 12px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg); color: var(--text); height: 100vh;
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden; -webkit-font-smoothing: antialiased;
+        }
+        body::before {
+            content: ''; position: fixed; inset: 0; pointer-events: none;
+            background: radial-gradient(circle at 25% 35%, rgba(135,116,225,0.06) 0%, transparent 50%),
+                        radial-gradient(circle at 75% 65%, rgba(77,205,94,0.04) 0%, transparent 50%);
+        }
+        .login-card {
+            background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+            padding: 40px 36px; width: 420px; max-width: 94vw; text-align: center;
+            box-shadow: 0 8px 40px rgba(0,0,0,0.35);
+            animation: cardIn 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards;
+        }
+        @keyframes cardIn { from { opacity:0; transform:scale(0.92) translateY(24px); } to { opacity:1; transform:scale(1) translateY(0); } }
+        .logo {
+            width: 90px; height: 90px; background: linear-gradient(135deg,var(--accent),#6c5bbf);
+            border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            font-size: 44px; margin: 0 auto 18px; box-shadow: 0 0 40px rgba(135,116,225,0.25);
+            animation: float 4s ease-in-out infinite;
+        }
+        @keyframes float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-6px); } }
+        h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+        .subtitle { font-size: 14px; color: var(--sec); margin-bottom: 24px; line-height: 1.5; }
+
+        /* Mode tabs */
+        .mode-tabs { display: flex; gap: 0; margin-bottom: 22px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+        .mode-tab {
+            flex: 1; padding: 10px 8px; font-size: 13px; font-weight: 600; font-family: inherit;
+            border: none; background: var(--input); color: var(--muted); cursor: pointer;
+            transition: 0.15s;
+        }
+        .mode-tab + .mode-tab { border-left: 1px solid var(--border); }
+        .mode-tab.active { background: var(--accent); color: #fff; }
+        .mode-tab:hover:not(.active) { color: var(--sec); }
+
+        .input-group { margin-bottom: 14px; text-align: left; }
+        .input-group label { display: block; font-size: 13px; font-weight: 500; color: var(--sec); margin-bottom: 6px; }
+        .input-group input {
+            width: 100%; padding: 13px 16px; background: var(--input);
+            border: 1.5px solid var(--border); border-radius: var(--radius);
+            color: var(--text); font-size: 15px; font-family: inherit; outline: none; transition: 0.15s;
+        }
+        .input-group input:focus { border-color: var(--accent); }
+        .input-group input::placeholder { color: var(--muted); }
+        .input-hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
+
+        .pw-field { display: none; }
+        .pw-field.show { display: block; }
+
+        .server-toggle { margin-bottom: 16px; text-align: left; }
+        .server-toggle summary { font-size: 12px; color: var(--muted); cursor: pointer; padding: 4px 0; }
+        .server-toggle .fields { display: flex; gap: 8px; margin-top: 8px; }
+        .server-toggle input {
+            flex: 1; padding: 10px 14px; background: var(--input);
+            border: 1.5px solid var(--border); border-radius: 8px;
+            color: var(--text); font-size: 13px; font-family: inherit; outline: none;
+        }
+        .server-toggle input:focus { border-color: var(--accent); }
+
+        .btn-login {
+            width: 100%; padding: 14px; background: var(--accent); border: none;
+            border-radius: var(--radius); color: #fff; font-size: 15px; font-weight: 600;
+            font-family: inherit; cursor: pointer; transition: 0.15s;
+        }
+        .btn-login:hover { background: var(--accent-light); }
+        .btn-login:active { transform: scale(0.98); }
+        .btn-login:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        .error-msg { color: var(--red); font-size: 13px; margin-top: 12px; display: none; }
+
+        .info-box {
+            font-size: 12px; color: var(--muted); margin-top: 18px; padding-top: 18px;
+            border-top: 1px solid var(--border); line-height: 1.6; text-align: left;
+        }
+        .info-box strong { color: var(--green); }
+        .info-box .anon-info { color: var(--sec); }
+
+        .features-row { display: flex; justify-content: center; gap: 14px; margin-top: 18px; }
+        .feature { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="logo">&#x1F310;</div>
+        <h1>DNS Messenger</h1>
+        <p class="subtitle">Encrypted messenger through DNS tunnel</p>
+
+        <!-- Mode tabs -->
+        <div class="mode-tabs">
+            <button class="mode-tab active" data-mode="anonymous" onclick="setMode('anonymous')">Anonymous</button>
+            <button class="mode-tab" data-mode="register" onclick="setMode('register')">Register</button>
+            <button class="mode-tab" data-mode="login" onclick="setMode('login')">Sign In</button>
+        </div>
+
+        <form id="login-form" onsubmit="return doLogin(event)">
+            <div class="input-group">
+                <label>Username</label>
+                <input type="text" id="username" placeholder="Enter your nickname" autocomplete="off" autofocus required minlength="2" maxlength="20" pattern="[a-zA-Z0-9_]+">
+                <div class="input-hint" id="username-hint">Latin letters, digits, underscore. 2-20 characters.</div>
+            </div>
+
+            <div class="input-group pw-field" id="pw-field">
+                <label>Password</label>
+                <input type="password" id="password" placeholder="Enter password" autocomplete="off">
+                <div class="input-hint" id="pw-hint">Minimum 4 characters</div>
+            </div>
+
+            <details class="server-toggle">
+                <summary>Server settings</summary>
+                <div class="fields">
+                    <input type="text" id="server-ip" placeholder="Server IP" value="{{ server_ip }}">
+                    <input type="number" id="server-port" placeholder="Port" value="{{ server_port }}" style="max-width:100px">
+                </div>
+            </details>
+
+            <button type="submit" class="btn-login" id="btn-login">Enter Anonymously</button>
+            <div class="error-msg" id="error-msg"></div>
+        </form>
+
+        <div class="info-box" id="info-box">
+            <strong>&#x1F512;</strong> <span class="anon-info">Anonymous mode: no password needed, but anyone can use this nickname. For a protected account, switch to <strong>Register</strong>.</span>
+        </div>
+
+        <div class="features-row">
+            <span class="feature">&#x1F512; E2E</span>
+            <span class="feature">&#x1F310; DNS Tunnel</span>
+            <span class="feature">&#x1F465; Groups</span>
+            <span class="feature">&#x1F4CE; Files</span>
+        </div>
+    </div>
+
+    <script>
+        let mode = 'anonymous';
+
+        function setMode(m) {
+            mode = m;
+            document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === m));
+            const pwField = document.getElementById('pw-field');
+            const btn = document.getElementById('btn-login');
+            const info = document.getElementById('info-box');
+            const pwHint = document.getElementById('pw-hint');
+            const pwInput = document.getElementById('password');
+
+            if (m === 'anonymous') {
+                pwField.classList.remove('show');
+                pwInput.required = false;
+                btn.textContent = 'Enter Anonymously';
+                info.innerHTML = '<strong>&#x1F512;</strong> <span class="anon-info">Anonymous mode: no password needed, but anyone can use this nickname. For a protected account, switch to <strong>Register</strong>.</span>';
+            } else if (m === 'register') {
+                pwField.classList.add('show');
+                pwInput.required = true;
+                pwHint.textContent = 'Minimum 4 characters. Stored securely on server.';
+                btn.textContent = 'Create Account';
+                info.innerHTML = '<strong>&#x1F512;</strong> Your encryption keys are generated locally. Password protects your account from unauthorized access.';
+            } else {
+                pwField.classList.add('show');
+                pwInput.required = true;
+                pwHint.textContent = 'Enter your registered password';
+                btn.textContent = 'Sign In';
+                info.innerHTML = '<strong>&#x1F512;</strong> Sign in to your registered account. E2E keys are stored on this device.';
+            }
+        }
+
+        async function doLogin(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btn-login');
+            const errEl = document.getElementById('error-msg');
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!username) return;
+            btn.disabled = true;
+            const origText = btn.textContent;
+            btn.textContent = 'Connecting...';
+            errEl.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, mode }),
+                }).then(r => r.json());
+
+                if (res.ok) {
+                    window.location.href = '/';
+                } else {
+                    errEl.textContent = res.error || 'Connection error';
+                    errEl.style.display = 'block';
+                    btn.disabled = false;
+                    btn.textContent = origText;
+                }
+            } catch (err) {
+                errEl.textContent = 'Server unavailable';
+                errEl.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = origText;
+            }
+        }
+    </script>
+</body>
+</html>

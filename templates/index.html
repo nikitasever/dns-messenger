@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DNS Messenger</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
+</head>
+<body data-username="{{ username }}">
+
+<div class="app">
+    <!-- ── Sidebar ─────────────────────────────────────────────── -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <button class="menu-btn" id="menu-btn" onclick="openDrawer()" title="Menu">&#x2630;</button>
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="Search" autocomplete="off">
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs" id="tabs">
+            <button class="tab active" data-tab="all">All <span class="badge" id="badge-all" style="display:none">0</span></button>
+            <button class="tab" data-tab="dm">Personal <span class="badge" id="badge-dm" style="display:none">0</span></button>
+            <button class="tab" data-tab="group">Groups <span class="badge" id="badge-group" style="display:none">0</span></button>
+        </div>
+
+        <!-- Notification banners -->
+        <div id="notifications"></div>
+
+        <!-- Chat list -->
+        <div class="chat-list" id="chat-list"></div>
+
+        <!-- FAB menu -->
+        <div class="fab-menu" id="fab-menu">
+            <div class="fab-menu-item" onclick="showNewGroup(); closeFab();">
+                <span class="fab-icon" style="background:rgba(77,205,94,0.15);color:#4dcd5e">&#x1F465;</span>
+                New Group
+            </div>
+            <div class="fab-menu-item" onclick="showNewDM(); closeFab();">
+                <span class="fab-icon" style="background:rgba(135,116,225,0.15);color:#8774e1">&#x1F4AC;</span>
+                New Chat
+            </div>
+            <div class="fab-menu-item" onclick="showContacts(); closeFab();">
+                <span class="fab-icon" style="background:rgba(232,166,58,0.15);color:#e8a63a">&#x1F464;</span>
+                Contacts
+            </div>
+        </div>
+        <button class="fab" id="fab-btn" onclick="toggleFab()">&#x270E;</button>
+
+        <!-- Contacts panel -->
+        <div class="contacts-panel" id="contacts-panel">
+            <div class="contacts-header">
+                <button class="back-btn" onclick="hideContacts()">&#x2190;</button>
+                <h2>Contacts</h2>
+            </div>
+            <div class="contacts-list" id="contacts-list">
+                <div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ── Drawer ──────────────────────────────────────────────── -->
+    <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+    <div class="drawer" id="drawer">
+        <div class="drawer-header">
+            <div class="drawer-avatar" id="drawer-avatar"></div>
+            <div class="drawer-username">{{ username }}</div>
+            <div class="drawer-status">
+                <span class="online-dot"></span> online
+            </div>
+        </div>
+        <div class="drawer-menu">
+            <div class="drawer-item" onclick="showContacts(); closeDrawer();">
+                <span class="drawer-icon">&#x1F464;</span> Contacts
+            </div>
+            <div class="drawer-item" onclick="showNewGroup(); closeDrawer();">
+                <span class="drawer-icon">&#x1F465;</span> New Group
+            </div>
+            <div class="drawer-item" onclick="showNewDM(); closeDrawer();">
+                <span class="drawer-icon">&#x1F4AC;</span> New Chat
+            </div>
+            <div class="drawer-item" onclick="doLogout()">
+                <span class="drawer-icon">&#x1F6AA;</span> Log Out
+            </div>
+        </div>
+        <div class="drawer-footer">
+            DNS Tunnel Messenger &middot; E2E Encrypted
+        </div>
+    </div>
+
+    <!-- ── Chat area ───────────────────────────────────────────── -->
+    <main class="chat-area">
+        <div class="chat-header" id="chat-header" style="display:none"></div>
+
+        <div class="messages" id="messages" style="display:none"></div>
+
+        <!-- Empty state -->
+        <div class="no-chat" id="no-chat">
+            <div class="empty-icon">&#x1F310;</div>
+            <h2>DNS Tunnel Messenger</h2>
+            <p>Encrypted messages via DNS queries. Works even during internet shutdowns.</p>
+            <div class="features">
+                <span class="feature-tag">&#x1F512; E2E</span>
+                <span class="feature-tag">&#x1F310; DNS Tunnel</span>
+                <span class="feature-tag">&#x1F4CE; Files</span>
+            </div>
+        </div>
+
+        <!-- Input area -->
+        <div class="input-area" id="input-area" style="display:none">
+            <div class="input-wrap">
+                <button class="voice-rec-btn" id="voice-rec-btn" onclick="toggleVoiceRecord()" title="Voice message">&#x1F3A4;</button>
+                <textarea id="msg-input" placeholder="Message" rows="1"></textarea>
+                <button class="attach-btn" onclick="sendFile()" title="Attach file">&#x1F4CE;</button>
+            </div>
+            <button class="send-btn" id="send-btn" title="Send">&#x27A4;</button>
+        </div>
+
+        <!-- Drop overlay -->
+        <div class="drop-overlay" id="drop-overlay">
+            <span>&#x1F4CE; Drop file to send</span>
+        </div>
+    </main>
+</div>
+
+<input type="file" id="file-input">
+
+<!-- ── Call overlay ────────────────────────────────────────────── -->
+<div class="call-overlay" id="call-overlay">
+    <div class="call-bg"></div>
+    <div class="call-content">
+        <div class="call-avatar" id="call-avatar"></div>
+        <div class="call-name" id="call-name"></div>
+        <div class="call-status" id="call-status">Calling...</div>
+        <div class="call-timer" id="call-timer" style="display:none">00:00</div>
+
+        <!-- Video containers -->
+        <div class="call-videos" id="call-videos" style="display:none">
+            <video id="remote-video" autoplay playsinline></video>
+            <video id="local-video" autoplay playsinline muted></video>
+        </div>
+
+        <!-- Incoming call buttons -->
+        <div class="call-actions incoming" id="call-incoming" style="display:none">
+            <button class="call-btn reject" onclick="rejectCall()" title="Decline">
+                <span>&#x1F4F5;</span>
+            </button>
+            <button class="call-btn accept-audio" onclick="acceptCall(false)" title="Audio">
+                <span>&#x1F4DE;</span>
+            </button>
+            <button class="call-btn accept-video" onclick="acceptCall(true)" title="Video">
+                <span>&#x1F4F9;</span>
+            </button>
+        </div>
+
+        <!-- In-call buttons -->
+        <div class="call-actions active" id="call-active" style="display:none">
+            <button class="call-btn toggle" id="btn-mute" onclick="toggleMute()" title="Mute">
+                <span>&#x1F3A4;</span>
+            </button>
+            <button class="call-btn toggle" id="btn-camera" onclick="toggleCamera()" title="Camera">
+                <span>&#x1F4F7;</span>
+            </button>
+            <button class="call-btn reject" onclick="endCall()" title="End call">
+                <span>&#x1F4F5;</span>
+            </button>
+        </div>
+
+        <!-- Outgoing call buttons -->
+        <div class="call-actions outgoing" id="call-outgoing" style="display:none">
+            <button class="call-btn reject" onclick="endCall()" title="Cancel">
+                <span>&#x1F4F5;</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<script src="/static/socket.io.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
