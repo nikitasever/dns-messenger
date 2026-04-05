@@ -8,6 +8,7 @@
     # Вторая вкладка → другой ник → второй пользователь.
 """
 
+import os
 import threading
 import time
 import json
@@ -40,7 +41,7 @@ from crypto_utils import (
 )
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'dns-messenger-session-key'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dns-messenger-session-key')
 socketio = SocketIO(app, cors_allowed_origins='*', manage_session=False)
 
 

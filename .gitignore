@@ -1,0 +1,17 @@
+# Messenger data (local only)
+.messenger_*/
+.messenger_accounts.json
+.messenger_admin.json
+.messenger_blocked.json
+.messenger_cert.pem
+.messenger_key.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# IDE
+.claude/
+.vscode/
