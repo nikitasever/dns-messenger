@@ -14,12 +14,12 @@ def start_relay():
     domain = os.environ.get('DNS_DOMAIN', 'msg.tunnel.local')
     relay_port = int(os.environ.get('RELAY_PORT', '15353'))
     relay = RelayServer(domain=domain, bind='127.0.0.1', port=relay_port)
-    print(f'[*] Relay server starting on 127.0.0.1:{relay_port}')
+    print(f'[*] Relay server starting on 127.0.0.1:{relay_port}', flush=True)
     relay.run()
 
 def start_web():
     """Start the web client."""
-    from web_client import app, socketio, init_admin, start_poll_loop
+    from web_client import app, socketio, init_admin
     from transport import UDPTransport
     import web_client
 
@@ -33,7 +33,8 @@ def start_web():
 
     init_admin()
 
-    print(f'[*] Web client starting on 0.0.0.0:{web_port}')
+    print(f'[*] Web client starting on 0.0.0.0:{web_port}', flush=True)
+    print(f'[*] PORT env = {os.environ.get("PORT", "not set")}', flush=True)
     socketio.run(app, host='0.0.0.0', port=web_port,
                  debug=False, allow_unsafe_werkzeug=True)
 
