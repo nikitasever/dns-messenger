@@ -1661,3 +1661,74 @@ body {
 .message.deleted .msg-text {
     color: var(--text-muted);
 }
+
+/* ── Avatar images ───────────────────────────────────────────────── */
+
+.avatar-img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+    position: absolute;
+    inset: 0;
+}
+
+.avatar { position: relative; overflow: hidden; }
+
+/* ── Expanded emoji panel ────────────────────────────────────────── */
+
+.ctx-emoji-panel {
+    display: none;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    max-height: 160px;
+    overflow-y: auto;
+    justify-content: center;
+}
+
+.ctx-emoji-panel.show { display: flex; }
+
+.ctx-emoji-panel button {
+    width: 38px;
+    height: 38px;
+    border: none;
+    background: none;
+    font-size: 20px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ctx-emoji-panel button:hover {
+    background: var(--bg-hover);
+    transform: scale(1.15);
+}
+
+.ctx-more-emoji {
+    color: var(--text-muted) !important;
+    font-size: 18px !important;
+    font-weight: 700;
+}
+
+.ctx-more-emoji:hover {
+    color: var(--text) !important;
+}
+
+/* ── Change photo hint ───────────────────────────────────────────── */
+
+.change-photo-hint {
+    display: inline-block;
+    margin-left: 8px;
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+    opacity: 0.7;
+    transition: var(--transition);
+}
+
+.change-photo-hint:hover { opacity: 1; }

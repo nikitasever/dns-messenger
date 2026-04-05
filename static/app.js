@@ -20,11 +20,33 @@ function avatarColor(name) {
     return AVATAR_COLORS[hashStr(name) % AVATAR_COLORS.length];
 }
 
+// Profile photo cache
+const profilePhotos = {};
+
 function avatarHtml(name, isGroup, size) {
     const sz = size || '';
     const colors = avatarColor(name);
     const initial = isGroup ? '#' : name[0].toUpperCase();
+    const photo = !isGroup && profilePhotos[name];
+    if (photo) {
+        return `<div class="avatar ${sz}" style="background:linear-gradient(135deg,${colors[0]},${colors[1]})"><img src="${photo}" class="avatar-img" alt=""></div>`;
+    }
     return `<div class="avatar ${sz}" style="background:linear-gradient(135deg,${colors[0]},${colors[1]})">${initial}</div>`;
+}
+
+// Last seen cache
+const lastSeenCache = {};
+
+function formatLastSeen(data) {
+    if (!data) return '';
+    if (data.online) return 'online';
+    if (!data.last_seen) return 'last seen recently';
+    const diff = (Date.now() / 1000) - data.last_seen;
+    if (diff < 60) return 'last seen just now';
+    if (diff < 3600) return `last seen ${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `last seen ${Math.floor(diff / 3600)}h ago`;
+    const d = new Date(data.last_seen * 1000);
+    return 'last seen ' + d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
 // ── State ───────────────────────────────────────────────────────────
@@ -223,14 +245,18 @@ function renderHeader() {
     if (!chat) return;
     const isGroup = chat.type === 'group';
 
+    const lsData = !isGroup ? lastSeenCache[chat.name] : null;
+    const lsText = !isGroup ? formatLastSeen(lsData) : 'E2E group \u00b7 DNS Tunnel';
+    const isOnline = lsData?.online;
+
     $chatHeader.innerHTML = `
         <button class="mobile-back" onclick="goBack()">&#x2190;</button>
         ${avatarHtml(chat.name, isGroup, 'sm')}
         <div class="header-info">
             <div class="chat-title">${esc(chat.name)}</div>
             <div class="chat-subtitle">
-                <span class="online-dot"></span>
-                ${isGroup ? 'E2E group \u00b7 DNS Tunnel' : 'E2E encrypted \u00b7 DNS Tunnel'}
+                <span class="online-dot" style="background:${isOnline || isGroup ? 'var(--green)' : 'var(--text-muted)'}"></span>
+                ${isGroup ? 'E2E group \u00b7 DNS Tunnel' : esc(lsText)}
             </div>
         </div>
         <div class="header-actions">
@@ -241,6 +267,11 @@ function renderHeader() {
             ${isGroup ? `<button class="invite-btn" onclick="showInviteModal()">+ Member</button>` : ''}
         </div>
     `;
+
+    // Fetch last seen for DM chats
+    if (!isGroup) {
+        fetchLastSeen(chat.name);
+    }
 }
 
 // ── Render: Messages ────────────────────────────────────────────────
@@ -1083,6 +1114,29 @@ function addReaction(emoji) {
     hideContextMenu();
 }
 
+const EMOJI_FULL = [
+    '👍','👎','❤️','🔥','😂','😮','😢','🥰','😡','🤔',
+    '👏','🎉','💯','🙏','😎','🤣','💪','😱','🥳','😈',
+    '💀','🤡','🤮','💩','👀','🫡','🤝','✅','❌','⭐',
+];
+
+function toggleEmojiPanel() {
+    const panel = document.getElementById('ctx-emoji-panel');
+    if (!panel) return;
+    if (panel.classList.contains('show')) {
+        panel.classList.remove('show');
+        return;
+    }
+    panel.innerHTML = '';
+    for (const em of EMOJI_FULL) {
+        const btn = document.createElement('button');
+        btn.textContent = em;
+        btn.onclick = () => addReaction(em);
+        panel.appendChild(btn);
+    }
+    panel.classList.add('show');
+}
+
 function toggleReactionClick(msgId, emoji) {
     if (!state.currentChat) return;
     const chat = state.chats[state.currentChat.id];
@@ -1302,7 +1356,12 @@ function openDrawer() {
     const $da = $('#drawer-avatar');
     if ($da) {
         $da.style.background = `linear-gradient(135deg,${colors[0]},${colors[1]})`;
-        $da.textContent = state.username[0].toUpperCase();
+        const photo = profilePhotos[state.username];
+        if (photo) {
+            $da.innerHTML = `<img src="${photo}" class="avatar-img" alt="">`;
+        } else {
+            $da.textContent = state.username[0].toUpperCase();
+        }
     }
     $('#drawer-overlay')?.classList.add('show');
     $('#drawer')?.classList.add('show');
@@ -1687,6 +1746,110 @@ function formatSize(bytes) {
     return (bytes / 1048576).toFixed(1) + ' MB';
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Last Seen & Profile Photos
+// ═══════════════════════════════════════════════════════════════════
+
+async function fetchLastSeen(username) {
+    try {
+        const res = await fetch(`/api/last-seen/${username}`).then(r => r.json());
+        lastSeenCache[username] = res;
+        // Update header if still viewing this chat
+        if (state.currentChat?.id === username) {
+            const sub = document.querySelector('.chat-header .chat-subtitle');
+            const dot = document.querySelector('.chat-header .online-dot');
+            if (sub) {
+                const text = formatLastSeen(res);
+                sub.innerHTML = `<span class="online-dot" style="background:${res.online ? 'var(--green)' : 'var(--text-muted)'}"></span> ${esc(text)}`;
+            }
+        }
+    } catch (e) {}
+}
+
+async function fetchProfilePhotos(usernames) {
+    if (!usernames.length) return;
+    try {
+        const res = await fetch('/api/profile/photos', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ users: usernames }),
+        }).then(r => r.json());
+        let changed = false;
+        for (const [u, photo] of Object.entries(res)) {
+            if (photo && profilePhotos[u] !== photo) {
+                profilePhotos[u] = photo;
+                changed = true;
+            }
+        }
+        if (changed) {
+            renderChatList();
+            if (state.currentChat) renderHeader();
+        }
+    } catch (e) {}
+}
+
+function showProfilePhotoUpload() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async () => {
+        const file = input.files[0];
+        if (!file) return;
+        if (file.size > 100 * 1024) {
+            toast('Photo too large (max 100 KB)', 'error');
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = async () => {
+            const dataUrl = reader.result;
+            try {
+                // Resize to 200x200 max
+                const resized = await resizeImage(dataUrl, 200);
+                const res = await fetch('/api/profile/photo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ photo: resized }),
+                }).then(r => r.json());
+                if (res.ok) {
+                    profilePhotos[state.username] = resized;
+                    renderChatList();
+                    toast('Profile photo updated', 'success');
+                } else {
+                    toast(res.error || 'Upload failed', 'error');
+                }
+            } catch (e) {
+                toast('Upload error', 'error');
+            }
+        };
+        reader.readAsDataURL(file);
+    };
+    input.click();
+}
+
+function resizeImage(dataUrl, maxSize) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let w = img.width, h = img.height;
+            if (w > h) { if (w > maxSize) { h = h * maxSize / w; w = maxSize; } }
+            else { if (h > maxSize) { w = w * maxSize / h; h = maxSize; } }
+            canvas.width = w;
+            canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.8));
+        };
+        img.src = dataUrl;
+    });
+}
+
+// Periodically refresh last seen for current chat
+setInterval(() => {
+    if (state.currentChat && state.currentChat.type === 'dm') {
+        fetchLastSeen(state.currentChat.id);
+    }
+}, 10000);
+
 // ── Init ────────────────────────────────────────────────────────────
 async function init() {
     loadState();
@@ -1698,10 +1861,17 @@ async function init() {
         for (const gid of res.groups || []) ensureChat(gid, 'group', gid);
     } catch (e) {}
 
-    // Fetch users for initial known list
+    // Fetch users for initial known list + photos
     try {
         const res = await fetch('/api/users').then(r => r.json());
         state.knownUsers = res.users || [];
+        // Fetch profile photos for all known users + chat partners
+        const allUsers = new Set(state.knownUsers);
+        allUsers.add(state.username);
+        for (const id of Object.keys(state.chats)) {
+            if (state.chats[id].type === 'dm') allUsers.add(id);
+        }
+        fetchProfilePhotos([...allUsers]);
     } catch (e) {}
 
     renderChatList();

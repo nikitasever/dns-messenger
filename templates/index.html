@@ -65,10 +65,11 @@
     <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
     <div class="drawer" id="drawer">
         <div class="drawer-header">
-            <div class="drawer-avatar" id="drawer-avatar"></div>
+            <div class="drawer-avatar" id="drawer-avatar" onclick="showProfilePhotoUpload()" title="Change photo" style="cursor:pointer"></div>
             <div class="drawer-username">{{ username }}</div>
             <div class="drawer-status">
                 <span class="online-dot"></span> online
+                <span class="change-photo-hint" onclick="showProfilePhotoUpload()">&#x1F4F7; Change photo</span>
             </div>
         </div>
         <div class="drawer-menu">
@@ -190,8 +191,9 @@
         <button onclick="addReaction('😮')">😮</button>
         <button onclick="addReaction('😢')">😢</button>
         <button onclick="addReaction('🔥')">🔥</button>
-        <button onclick="addReaction('👎')">👎</button>
+        <button class="ctx-more-emoji" onclick="toggleEmojiPanel()">+</button>
     </div>
+    <div class="ctx-emoji-panel" id="ctx-emoji-panel"></div>
     <div class="ctx-actions">
         <button onclick="ctxReply()"><span>↩</span> Reply</button>
         <button onclick="ctxCopy()"><span>📋</span> Copy</button>

@@ -334,9 +334,29 @@ users: dict[str, UserMessenger] = {}
 # Временный кэш скачанных файлов: token → (data, filename, expires)
 file_cache_lock = threading.Lock()
 file_cache: dict[str, tuple] = {}
+# Last seen timestamps: username → unix timestamp
+last_seen_lock = threading.Lock()
+last_seen: dict[str, float] = {}
+# Profile photos: username → base64 data URL (stored on disk)
+PROFILES_FILE = Path('.messenger_profiles.json')
 transport = None
 server_ip = '127.0.0.1'
 server_port = 5353
+
+
+def get_profiles() -> dict:
+    return _load_json(PROFILES_FILE)
+
+
+def save_profile_photo(username: str, photo: str):
+    profiles = get_profiles()
+    profiles[username] = {'photo': photo}
+    _save_json(PROFILES_FILE, profiles)
+
+
+def update_last_seen(username: str):
+    with last_seen_lock:
+        last_seen[username] = time.time()
 
 
 def get_messenger() -> UserMessenger | None:
@@ -363,6 +383,7 @@ def start_poll_loop(m: UserMessenger):
                 for finfo in m.poll_files():
                     socketio.emit('file', finfo, room=m.username)
                 m.poll_errors = 0
+                update_last_seen(m.username)
                 socketio.emit('status', {'connected': True}, room=m.username)
             except Exception:
                 m.poll_errors += 1
@@ -546,6 +567,78 @@ def api_users():
         return jsonify({'users': [u for u in all_users if u != m.username and u not in blocked]})
     except Exception:
         return jsonify({'users': []})
+
+
+# ── Last seen ───────────────────────────────────────────────────────
+
+@app.route('/api/last-seen/<username>')
+def api_last_seen(username):
+    m = get_messenger()
+    if not m:
+        return jsonify({'online': False})
+    with users_lock:
+        is_online = username in users and users[username].running
+    with last_seen_lock:
+        ts = last_seen.get(username)
+    return jsonify({
+        'online': is_online,
+        'last_seen': ts,
+    })
+
+
+@app.route('/api/last-seen-batch', methods=['POST'])
+def api_last_seen_batch():
+    """Get last seen for multiple users at once."""
+    m = get_messenger()
+    if not m:
+        return jsonify({})
+    usernames = request.json.get('users', [])
+    result = {}
+    with users_lock:
+        online_set = {u for u, um in users.items() if um.running}
+    with last_seen_lock:
+        for u in usernames:
+            result[u] = {
+                'online': u in online_set,
+                'last_seen': last_seen.get(u),
+            }
+    return jsonify(result)
+
+
+# ── Profile photos ──────────────────────────────────────────────────
+
+@app.route('/api/profile/photo', methods=['POST'])
+def api_profile_photo_set():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'})
+    photo = request.json.get('photo', '')
+    # Validate: must be a data URL, max 100KB base64
+    if photo and not photo.startswith('data:image/'):
+        return jsonify({'ok': False, 'error': 'Invalid image format'})
+    if len(photo) > 150_000:
+        return jsonify({'ok': False, 'error': 'Image too large (max ~100KB)'})
+    save_profile_photo(m.username, photo)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/profile/photo/<username>')
+def api_profile_photo_get(username):
+    profiles = get_profiles()
+    p = profiles.get(username, {})
+    return jsonify({'photo': p.get('photo', '')})
+
+
+@app.route('/api/profile/photos', methods=['POST'])
+def api_profile_photos_batch():
+    """Get photos for multiple users at once."""
+    usernames = request.json.get('users', [])
+    profiles = get_profiles()
+    result = {}
+    for u in usernames:
+        p = profiles.get(u, {})
+        result[u] = p.get('photo', '')
+    return jsonify(result)
 
 
 # ── Файлы ────────────────────────────────────────────────────────────
