@@ -1506,3 +1506,158 @@ body {
     }
     .call-btn { width: 56px; height: 56px; font-size: 24px; }
 }
+
+/* ── Message Context Menu ────────────────────────────────────────── */
+
+.msg-context-menu {
+    position: fixed;
+    z-index: 400;
+    display: none;
+    flex-direction: column;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    min-width: 200px;
+    overflow: hidden;
+    animation: ctxIn 0.15s ease forwards;
+}
+
+.msg-context-menu.show { display: flex; }
+
+@keyframes ctxIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.ctx-reactions {
+    display: flex;
+    gap: 2px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    justify-content: center;
+}
+
+.ctx-reactions button {
+    width: 38px;
+    height: 38px;
+    border: none;
+    background: none;
+    font-size: 22px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ctx-reactions button:hover {
+    background: var(--bg-hover);
+    transform: scale(1.2);
+}
+
+.ctx-actions {
+    display: flex;
+    flex-direction: column;
+}
+
+.ctx-actions button {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 18px;
+    border: none;
+    background: none;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: var(--transition);
+    text-align: left;
+}
+
+.ctx-actions button:hover { background: var(--bg-hover); }
+
+.ctx-actions button span {
+    font-size: 16px;
+    width: 20px;
+    text-align: center;
+}
+
+.ctx-actions button:last-child { color: var(--red); }
+
+/* ── Message Reactions ───────────────────────────────────────────── */
+
+.msg-reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.msg-reactions .reaction {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: rgba(135, 116, 225, 0.15);
+    border: 1px solid rgba(135, 116, 225, 0.25);
+    font-size: 15px;
+    cursor: pointer;
+    transition: var(--transition);
+    user-select: none;
+}
+
+.msg-reactions .reaction:hover {
+    background: rgba(135, 116, 225, 0.3);
+}
+
+.msg-reactions .reaction.mine {
+    background: rgba(135, 116, 225, 0.3);
+    border-color: var(--accent);
+}
+
+.msg-reactions .reaction .r-count {
+    font-size: 12px;
+    color: var(--text-secondary);
+    min-width: 8px;
+    text-align: center;
+}
+
+/* ── Message info tooltip ────────────────────────────────────────── */
+
+.msg-info-tooltip {
+    position: fixed;
+    z-index: 350;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    box-shadow: var(--shadow-lg);
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    animation: ctxIn 0.15s ease forwards;
+    pointer-events: none;
+}
+
+/* ── Drawer divider ──────────────────────────────────────────────── */
+
+.drawer-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+}
+
+/* ── Deleted message ─────────────────────────────────────────────── */
+
+.message.deleted {
+    opacity: 0.5;
+    font-style: italic;
+}
+
+.message.deleted .msg-text {
+    color: var(--text-muted);
+}

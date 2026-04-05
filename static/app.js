@@ -96,6 +96,8 @@ function ensureChat(id, type, name) {
 function addMessage(chatId, msg) {
     const chat = state.chats[chatId];
     if (!chat) return;
+    // Assign unique ID if not present
+    if (!msg.id) msg.id = `${msg.ts}_${Math.random().toString(36).slice(2, 8)}`;
     chat.messages.push(msg);
     chat.lastTs = msg.ts;
     saveState();
@@ -277,12 +279,27 @@ function renderMessages() {
 
         const div = document.createElement('div');
 
+        // Skip deleted messages or show placeholder
+        if (msg.deleted) {
+            div.className = `message ${isMine ? 'sent' : 'received'} deleted${isNew ? ' first' : ''}`;
+            div.innerHTML = `<div class="msg-text">Message deleted<span class="msg-footer">
+                <span class="msg-time">${formatTime(msg.ts)}</span>
+            </span></div>`;
+            $messages.appendChild(div);
+            continue;
+        }
+
+        // Data attributes for context menu
+        div.dataset.msgId = msg.id || '';
+        div.dataset.chatId = state.currentChat.id;
+
+        const reactionsHtml = renderReactions(msg);
+
         if (msg.voice) {
             // Voice message
             div.className = `message ${isMine ? 'sent' : 'received'}${isNew ? ' first' : ''}`;
             const dur = msg.duration || 0;
             const durStr = Math.floor(dur / 60) + ':' + (dur % 60).toString().padStart(2, '0');
-            // Generate random-looking waveform bars
             const bars = [];
             const seed = hashStr(msg.file || '' + msg.ts);
             for (let i = 0; i < 28; i++) {
@@ -300,6 +317,7 @@ function renderMessages() {
                     <span class="msg-time">${formatTime(msg.ts)}</span>
                     ${isMine ? '<span class="msg-status">&#x2713;&#x2713;</span>' : ''}
                 </div>
+                ${reactionsHtml}
             `;
         } else if (msg.file) {
             div.className = `message ${isMine ? 'sent' : 'received'} file-msg${isNew ? ' first' : ''}`;
@@ -310,6 +328,7 @@ function renderMessages() {
                     <div class="file-name">${esc(msg.file)}</div>
                     <div class="file-size">${formatSize(msg.size)}</div>
                 </div>
+                ${reactionsHtml}
             `;
             if (msg.fid && !isMine) {
                 div.onclick = () => downloadFile(msg.fid, msg.from, msg.file);
@@ -323,8 +342,19 @@ function renderMessages() {
                     <span class="msg-time">${formatTime(msg.ts)}</span>
                     ${isMine ? '<span class="msg-status">&#x2713;&#x2713;</span>' : ''}
                 </span></div>
+                ${reactionsHtml}
             `;
         }
+
+        // Context menu on right-click and long-press
+        div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg); });
+        let longPressTimer;
+        div.addEventListener('touchstart', (e) => {
+            longPressTimer = setTimeout(() => { showContextMenu(e.touches[0], msg); }, 500);
+        }, { passive: true });
+        div.addEventListener('touchend', () => clearTimeout(longPressTimer));
+        div.addEventListener('touchmove', () => clearTimeout(longPressTimer));
+
         $messages.appendChild(div);
     }
 
@@ -975,6 +1005,254 @@ async function sendVoiceMessage(blob, duration) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Context Menu, Reactions, Deletion
+// ═══════════════════════════════════════════════════════════════════
+
+let ctxTargetMsg = null;
+const $ctxMenu = document.getElementById('msg-context-menu');
+
+function showContextMenu(e, msg) {
+    ctxTargetMsg = msg;
+    if (!$ctxMenu) return;
+
+    $ctxMenu.classList.add('show');
+
+    // Position
+    const x = e.clientX || e.pageX;
+    const y = e.clientY || e.pageY;
+    const mw = $ctxMenu.offsetWidth;
+    const mh = $ctxMenu.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    $ctxMenu.style.left = (x + mw > vw ? Math.max(0, x - mw) : x) + 'px';
+    $ctxMenu.style.top = (y + mh > vh ? Math.max(0, y - mh) : y) + 'px';
+}
+
+function hideContextMenu() {
+    $ctxMenu?.classList.remove('show');
+    ctxTargetMsg = null;
+}
+
+// Close on click outside
+document.addEventListener('click', (e) => {
+    if ($ctxMenu?.classList.contains('show') && !$ctxMenu.contains(e.target)) {
+        hideContextMenu();
+    }
+});
+
+document.addEventListener('scroll', hideContextMenu, true);
+
+// ── Reactions ──────────────────────────────────────────────────────
+
+function renderReactions(msg) {
+    if (!msg.reactions || Object.keys(msg.reactions).length === 0) return '';
+    let html = '<div class="msg-reactions">';
+    for (const [emoji, users] of Object.entries(msg.reactions)) {
+        if (!users || users.length === 0) continue;
+        const isMine = users.includes(state.username);
+        html += `<span class="reaction${isMine ? ' mine' : ''}" onclick="toggleReactionClick('${msg.id}','${emoji}')" title="${users.join(', ')}">${emoji}<span class="r-count">${users.length > 1 ? users.length : ''}</span></span>`;
+    }
+    html += '</div>';
+    return html;
+}
+
+function addReaction(emoji) {
+    if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
+
+    const chat = state.chats[state.currentChat.id];
+    if (!chat) { hideContextMenu(); return; }
+
+    const msg = chat.messages.find(m => m.id === ctxTargetMsg.id);
+    if (!msg) { hideContextMenu(); return; }
+
+    if (!msg.reactions) msg.reactions = {};
+    if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
+
+    const idx = msg.reactions[emoji].indexOf(state.username);
+    if (idx >= 0) {
+        msg.reactions[emoji].splice(idx, 1);
+        if (msg.reactions[emoji].length === 0) delete msg.reactions[emoji];
+    } else {
+        msg.reactions[emoji].push(state.username);
+    }
+
+    saveState();
+    renderMessages();
+    hideContextMenu();
+}
+
+function toggleReactionClick(msgId, emoji) {
+    if (!state.currentChat) return;
+    const chat = state.chats[state.currentChat.id];
+    if (!chat) return;
+
+    const msg = chat.messages.find(m => m.id === msgId);
+    if (!msg) return;
+
+    if (!msg.reactions) msg.reactions = {};
+    if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
+
+    const idx = msg.reactions[emoji].indexOf(state.username);
+    if (idx >= 0) {
+        msg.reactions[emoji].splice(idx, 1);
+        if (msg.reactions[emoji].length === 0) delete msg.reactions[emoji];
+    } else {
+        msg.reactions[emoji].push(state.username);
+    }
+
+    saveState();
+    renderMessages();
+}
+
+// ── Context actions ────────────────────────────────────────────────
+
+function ctxReply() {
+    if (!ctxTargetMsg) { hideContextMenu(); return; }
+    const text = ctxTargetMsg.text || ctxTargetMsg.file || 'voice';
+    const prefix = `> ${ctxTargetMsg.from}: ${text.slice(0, 60)}\n`;
+    $msgInput.value = prefix;
+    $msgInput.focus();
+    $msgInput.setSelectionRange(prefix.length, prefix.length);
+    hideContextMenu();
+}
+
+function ctxCopy() {
+    if (!ctxTargetMsg) { hideContextMenu(); return; }
+    const text = ctxTargetMsg.text || '';
+    if (text) {
+        navigator.clipboard?.writeText(text).then(() => toast('Copied', 'success')).catch(() => {});
+    } else {
+        toast('No text to copy', 'info');
+    }
+    hideContextMenu();
+}
+
+function ctxDelete() {
+    if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
+    const chat = state.chats[state.currentChat.id];
+    if (!chat) { hideContextMenu(); return; }
+
+    const idx = chat.messages.findIndex(m => m.id === ctxTargetMsg.id);
+    if (idx < 0) { hideContextMenu(); return; }
+
+    const isMine = ctxTargetMsg.from === state.username;
+
+    // Show delete options
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `
+        <div class="modal">
+            <h3>Delete message?</h3>
+            <p style="color:var(--text-secondary);font-size:14px;margin-bottom:16px">
+                ${isMine ? 'This message was sent by you.' : `This message is from ${esc(ctxTargetMsg.from)}.`}
+            </p>
+            <div class="modal-actions" style="flex-direction:column;gap:8px">
+                <button class="btn btn-primary" style="width:100%;background:var(--red)" id="del-for-me">Delete for me</button>
+                ${isMine ? '<button class="btn btn-primary" style="width:100%;background:var(--red);opacity:0.8" id="del-for-all">Delete for everyone</button>' : ''}
+                <button class="btn btn-secondary" style="width:100%" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#del-for-me').onclick = () => {
+        chat.messages[idx].deleted = true;
+        chat.messages[idx].text = '';
+        chat.messages[idx].file = '';
+        chat.messages[idx].voice = false;
+        saveState();
+        renderMessages();
+        renderChatList();
+        overlay.remove();
+        toast('Message deleted', 'success');
+    };
+
+    const delAll = overlay.querySelector('#del-for-all');
+    if (delAll) {
+        delAll.onclick = async () => {
+            chat.messages[idx].deleted = true;
+            chat.messages[idx].text = '';
+            chat.messages[idx].file = '';
+            chat.messages[idx].voice = false;
+            saveState();
+            renderMessages();
+            renderChatList();
+            overlay.remove();
+            // Send delete signal to peer (as special message)
+            if (chat.type === 'dm') {
+                try {
+                    await fetch('/api/send', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ to: state.currentChat.id, text: `__DELETE__:${ctxTargetMsg.id}` }),
+                    });
+                } catch (e) {}
+            }
+            toast('Message deleted for everyone', 'success');
+        };
+    }
+
+    hideContextMenu();
+}
+
+function ctxInfo() {
+    if (!ctxTargetMsg) { hideContextMenu(); return; }
+    const msg = ctxTargetMsg;
+    const d = new Date(msg.ts);
+    const fullDate = d.toLocaleDateString('ru-RU', {
+        day: 'numeric', month: 'long', year: 'numeric'
+    });
+    const fullTime = d.toLocaleTimeString('ru-RU', {
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+
+    let info = `From: ${msg.from}\nDate: ${fullDate}\nTime: ${fullTime}`;
+    if (msg.file) info += `\nFile: ${msg.file}`;
+    if (msg.size) info += `\nSize: ${formatSize(msg.size)}`;
+    if (msg.voice) info += `\nType: Voice message`;
+    if (msg.duration) info += `\nDuration: ${msg.duration}s`;
+    if (msg.reactions) {
+        const rList = Object.entries(msg.reactions)
+            .filter(([, u]) => u.length > 0)
+            .map(([e, u]) => `${e} ${u.join(', ')}`)
+            .join('; ');
+        if (rList) info += `\nReactions: ${rList}`;
+    }
+
+    // Show as tooltip near mouse
+    const tooltip = document.createElement('div');
+    tooltip.className = 'msg-info-tooltip';
+    tooltip.textContent = info;
+    tooltip.style.left = $ctxMenu.style.left;
+    tooltip.style.top = $ctxMenu.style.top;
+    document.body.appendChild(tooltip);
+    setTimeout(() => tooltip.remove(), 4000);
+
+    hideContextMenu();
+}
+
+// Handle incoming delete commands
+function handleDeleteCommand(chatId, text) {
+    if (!text.startsWith('__DELETE__:')) return false;
+    const msgId = text.slice(10);
+    const chat = state.chats[chatId];
+    if (!chat) return true;
+    const msg = chat.messages.find(m => m.id === msgId);
+    if (msg) {
+        msg.deleted = true;
+        msg.text = '';
+        msg.file = '';
+        msg.voice = false;
+        saveState();
+        if (state.currentChat?.id === chatId) renderMessages();
+        renderChatList();
+    }
+    return true;
+}
+
 // ── Drag & Drop ─────────────────────────────────────────────────────
 const $dropOverlay = $('#drop-overlay');
 let dragCounter = 0;
@@ -1285,6 +1563,9 @@ socket.on('message', (msg) => {
         chatName = msg.group;
     }
 
+    // Handle delete commands silently
+    if (msg.text && handleDeleteCommand(chatId, msg.text)) return;
+
     const chat = ensureChat(chatId, chatType, chatName);
     const ts = Date.now();
     addMessage(chatId, { from: msg.from, text: msg.text, ts });
@@ -1391,6 +1672,12 @@ function formatTime(ts) {
     const d = new Date(ts);
     return d.getHours().toString().padStart(2, '0') + ':' +
            d.getMinutes().toString().padStart(2, '0');
+}
+
+function formatFullDateTime(ts) {
+    const d = new Date(ts);
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) +
+           ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function formatSize(bytes) {
