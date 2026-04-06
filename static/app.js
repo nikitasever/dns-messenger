@@ -1382,40 +1382,324 @@ function setPrivacyLastSeen(val) {
     }).catch(()=>{});
 }
 
-function showPrivacySettings() {
-    const cur = getPrivacyLastSeen();
+// ═══════════════════════════════════════════════════════════════════
+// Settings — Telegram-like multi-section preferences
+// ═══════════════════════════════════════════════════════════════════
+const SETTINGS_KEYS = {
+    notifSound: 'dns_set_notif_sound',
+    notifVibro: 'dns_set_notif_vibro',
+    notifDesktop: 'dns_set_notif_desktop',
+    msgPreview: 'dns_set_msg_preview',
+    enterSend: 'dns_set_enter_send',
+    theme: 'dns_set_theme',              // dark | light | midnight
+    accent: 'dns_set_accent',            // green | blue | purple | orange | red
+    fontScale: 'dns_set_font_scale',     // 0.9 | 1 | 1.1 | 1.2
+    animations: 'dns_set_animations',
+    chatWallpaper: 'dns_set_wallpaper',  // none | dots | grid | aurora
+};
+function getSetting(key, def) {
+    const v = localStorage.getItem(SETTINGS_KEYS[key] || key);
+    if (v === null || v === undefined) return def;
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    return v;
+}
+function setSetting(key, val) {
+    localStorage.setItem(SETTINGS_KEYS[key] || key, String(val));
+    applySettings();
+}
+function applySettings() {
+    const theme = getSetting('theme', 'dark');
+    const accent = getSetting('accent', 'green');
+    const scale = parseFloat(getSetting('fontScale', '1')) || 1;
+    const animOn = getSetting('animations', true);
+    const wall = getSetting('chatWallpaper', 'none');
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.dataset.accent = accent;
+    root.dataset.wallpaper = wall;
+    root.style.setProperty('--font-scale', scale);
+    root.classList.toggle('no-anim', !animOn);
+}
+applySettings();
+
+function showSettings(initialSection) {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
+    overlay.className = 'modal-overlay settings-overlay';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+    const sections = [
+        { id: 'general',  icon: '\u2699',    title: 'Основные' },
+        { id: 'notif',    icon: '\u{1F514}', title: 'Уведомления и звуки' },
+        { id: 'privacy',  icon: '\u{1F512}', title: 'Конфиденциальность' },
+        { id: 'appear',   icon: '\u{1F3A8}', title: 'Оформление' },
+        { id: 'chats',    icon: '\u{1F4AC}', title: 'Чаты' },
+        { id: 'data',     icon: '\u{1F4BE}', title: 'Данные и хранилище' },
+        { id: 'lang',     icon: '\u{1F310}', title: 'Язык' },
+        { id: 'about',    icon: '\u2139',    title: 'О приложении' },
+    ];
+
     overlay.innerHTML = `
-        <div class="modal">
-            <h3>Конфиденциальность</h3>
-            <p style="color:var(--text-secondary);font-size:14px;margin-bottom:12px">
-                Кто может видеть время моего последнего захода:
-            </p>
-            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
-                <label style="display:flex;align-items:center;gap:10px;padding:10px;background:var(--bg-input);border-radius:8px;cursor:pointer">
-                    <input type="radio" name="ls-priv" value="everyone" ${cur==='everyone'?'checked':''}>
-                    <span>Все</span>
-                </label>
-                <label style="display:flex;align-items:center;gap:10px;padding:10px;background:var(--bg-input);border-radius:8px;cursor:pointer">
-                    <input type="radio" name="ls-priv" value="nobody" ${cur==='nobody'?'checked':''}>
-                    <span>Никто</span>
-                </label>
+        <div class="modal settings-modal">
+            <div class="settings-header">
+                <h3>Настройки</h3>
+                <button class="settings-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
             </div>
-            <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Закрыть</button>
-                <button class="btn btn-primary" id="priv-save">Сохранить</button>
+            <div class="settings-body">
+                <div class="settings-sidebar">
+                    ${sections.map(s => `
+                        <div class="settings-tab" data-section="${s.id}">
+                            <span class="settings-tab-icon">${s.icon}</span>
+                            <span>${s.title}</span>
+                        </div>`).join('')}
+                </div>
+                <div class="settings-content" id="settings-content"></div>
             </div>
         </div>
     `;
     document.body.appendChild(overlay);
-    overlay.querySelector('#priv-save').onclick = () => {
-        const val = overlay.querySelector('input[name="ls-priv"]:checked').value;
-        setPrivacyLastSeen(val);
-        overlay.remove();
-        toast('Настройки сохранены', 'success');
+
+    const content = overlay.querySelector('#settings-content');
+    const tabs = overlay.querySelectorAll('.settings-tab');
+    const renderSection = (id) => {
+        tabs.forEach(t => t.classList.toggle('active', t.dataset.section === id));
+        content.innerHTML = buildSettingsSection(id);
+        wireSettingsSection(id, content, overlay);
     };
+    tabs.forEach(t => t.addEventListener('click', () => renderSection(t.dataset.section)));
+    renderSection(initialSection || 'general');
+}
+// Back-compat: existing code/drawer may still call showPrivacySettings
+function showPrivacySettings() { showSettings('privacy'); }
+
+function buildSettingsSection(id) {
+    const toggleRow = (label, key, def, hint) => {
+        const on = getSetting(key, def);
+        return `
+            <label class="set-row">
+                <div>
+                    <div class="set-label">${label}</div>
+                    ${hint ? `<div class="set-hint">${hint}</div>` : ''}
+                </div>
+                <span class="switch ${on?'on':''}" data-key="${key}" data-type="bool"></span>
+            </label>`;
+    };
+    const selectRow = (label, key, def, options) => {
+        const cur = getSetting(key, def);
+        return `
+            <div class="set-row">
+                <div class="set-label">${label}</div>
+                <div class="set-options" data-key="${key}" data-type="select">
+                    ${options.map(o => `<button class="set-opt ${o.val===cur?'active':''}" data-val="${o.val}">${o.label}</button>`).join('')}
+                </div>
+            </div>`;
+    };
+
+    if (id === 'general') {
+        return `
+            <h4 class="set-section-title">Основные</h4>
+            ${toggleRow('Отправка по Enter', 'enterSend', true, 'Ctrl+Enter — перевод строки')}
+            ${selectRow('Размер шрифта', 'fontScale', '1', [
+                { val: '0.9', label: 'Мелкий' },
+                { val: '1',   label: 'Обычный' },
+                { val: '1.1', label: 'Крупный' },
+                { val: '1.2', label: 'Огромный' },
+            ])}
+            ${toggleRow('Анимации интерфейса', 'animations', true, 'Отключите для слабых устройств')}
+        `;
+    }
+    if (id === 'notif') {
+        return `
+            <h4 class="set-section-title">Уведомления и звуки</h4>
+            ${toggleRow('Звук при сообщении', 'notifSound', true)}
+            ${toggleRow('Вибрация', 'notifVibro', true, 'На поддерживаемых устройствах')}
+            ${toggleRow('Уведомления на рабочем столе', 'notifDesktop', true)}
+            ${toggleRow('Показывать превью сообщений', 'msgPreview', true, 'Текст в уведомлении')}
+            <div class="set-row">
+                <button class="btn btn-secondary" id="test-notif">Протестировать звук</button>
+            </div>
+        `;
+    }
+    if (id === 'privacy') {
+        const cur = getPrivacyLastSeen();
+        return `
+            <h4 class="set-section-title">Конфиденциальность</h4>
+            <div class="set-row" style="flex-direction:column;align-items:stretch">
+                <div class="set-label" style="margin-bottom:6px">Кто видит время моего последнего захода</div>
+                <div class="set-options" data-key="lastSeen" data-type="privacy">
+                    <button class="set-opt ${cur==='everyone'?'active':''}" data-val="everyone">Все</button>
+                    <button class="set-opt ${cur==='nobody'?'active':''}" data-val="nobody">Никто</button>
+                </div>
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Завершить все сеансы</div>
+                    <div class="set-hint">Выйти из аккаунта на всех устройствах</div>
+                </div>
+                <button class="btn btn-danger" id="logout-all">Выйти</button>
+            </div>
+        `;
+    }
+    if (id === 'appear') {
+        return `
+            <h4 class="set-section-title">Оформление</h4>
+            ${selectRow('Тема', 'theme', 'dark', [
+                { val: 'dark',     label: 'Тёмная' },
+                { val: 'light',    label: 'Светлая' },
+                { val: 'midnight', label: 'Полночь' },
+            ])}
+            ${selectRow('Цвет акцента', 'accent', 'green', [
+                { val: 'green',  label: '🟢' },
+                { val: 'blue',   label: '🔵' },
+                { val: 'purple', label: '🟣' },
+                { val: 'orange', label: '🟠' },
+                { val: 'red',    label: '🔴' },
+            ])}
+            ${selectRow('Фон чата', 'chatWallpaper', 'none', [
+                { val: 'none',   label: 'Без фона' },
+                { val: 'dots',   label: 'Точки' },
+                { val: 'grid',   label: 'Сетка' },
+                { val: 'aurora', label: 'Сияние' },
+            ])}
+        `;
+    }
+    if (id === 'chats') {
+        return `
+            <h4 class="set-section-title">Чаты</h4>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Очистить историю всех чатов</div>
+                    <div class="set-hint">Удалит сообщения только на этом устройстве</div>
+                </div>
+                <button class="btn btn-danger" id="clear-history">Очистить</button>
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Экспорт чатов в JSON</div>
+                    <div class="set-hint">Скачать локальную копию всех сообщений</div>
+                </div>
+                <button class="btn btn-secondary" id="export-chats">Скачать</button>
+            </div>
+        `;
+    }
+    if (id === 'data') {
+        const bytes = (() => { try { return new Blob([JSON.stringify(state)]).size; } catch(e) { return 0; } })();
+        const kb = (bytes / 1024).toFixed(1);
+        return `
+            <h4 class="set-section-title">Данные и хранилище</h4>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Локальное хранилище</div>
+                    <div class="set-hint">Занято ~${kb} КБ</div>
+                </div>
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Сбросить кеш localStorage</div>
+                    <div class="set-hint">Удалит все настройки и локальные данные</div>
+                </div>
+                <button class="btn btn-danger" id="reset-storage">Сбросить</button>
+            </div>
+        `;
+    }
+    if (id === 'lang') {
+        return `
+            <h4 class="set-section-title">Язык интерфейса</h4>
+            <div class="set-row" style="flex-direction:column;align-items:stretch">
+                <div class="set-options" data-key="lang" data-type="lang">
+                    <button class="set-opt ${currentLang==='ru'?'active':''}" data-val="ru">🇷🇺 Русский</button>
+                    <button class="set-opt ${currentLang==='en'?'active':''}" data-val="en">🇬🇧 English</button>
+                </div>
+            </div>
+        `;
+    }
+    if (id === 'about') {
+        return `
+            <h4 class="set-section-title">О приложении</h4>
+            <div class="about-block">
+                <div class="about-logo">&#x1F310;</div>
+                <div class="about-title">DNS Tunnel Messenger</div>
+                <div class="about-sub">Версия 1.0 · E2E · DNS-туннель</div>
+                <p class="about-text">
+                    Мессенджер, работающий через DNS-запросы. Сообщения шифруются
+                    end-to-end на вашем устройстве и передаются даже при строгих
+                    ограничениях сети.
+                </p>
+                <p class="about-text"><a href="https://github.com/nikitasever/dns-messenger" target="_blank" style="color:var(--accent,#00a884)">Исходный код на GitHub</a></p>
+            </div>
+        `;
+    }
+    return '';
+}
+
+function wireSettingsSection(id, root, overlay) {
+    // Toggle switches
+    root.querySelectorAll('.switch[data-type="bool"]').forEach(sw => {
+        sw.addEventListener('click', () => {
+            const key = sw.dataset.key;
+            const cur = getSetting(key, true);
+            setSetting(key, !cur);
+            sw.classList.toggle('on', !cur);
+        });
+    });
+    // Select rows (theme, accent, fontScale, wallpaper)
+    root.querySelectorAll('.set-options[data-type="select"]').forEach(row => {
+        row.querySelectorAll('.set-opt').forEach(btn => {
+            btn.addEventListener('click', () => {
+                row.querySelectorAll('.set-opt').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                setSetting(row.dataset.key, btn.dataset.val);
+            });
+        });
+    });
+    // Privacy radio
+    root.querySelectorAll('.set-options[data-type="privacy"] .set-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+            root.querySelectorAll('.set-options[data-type="privacy"] .set-opt').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            setPrivacyLastSeen(btn.dataset.val);
+            toast('Сохранено', 'success');
+        });
+    });
+    // Language
+    root.querySelectorAll('.set-options[data-type="lang"] .set-opt').forEach(btn => {
+        btn.addEventListener('click', () => setLanguage(btn.dataset.val));
+    });
+
+    const byId = (id) => root.querySelector('#' + id);
+    if (id === 'notif') {
+        byId('test-notif')?.addEventListener('click', () => { playMessageSound(); vibrate(120); });
+    }
+    if (id === 'privacy') {
+        byId('logout-all')?.addEventListener('click', () => {
+            if (confirm('Выйти из аккаунта?')) doLogout();
+        });
+    }
+    if (id === 'chats') {
+        byId('clear-history')?.addEventListener('click', () => {
+            if (!confirm('Удалить все локальные сообщения?')) return;
+            for (const cid in state.chats) state.chats[cid].messages = [];
+            saveState();
+            renderChatList();
+            if (state.currentChat) renderMessages();
+            toast('История очищена', 'success');
+        });
+        byId('export-chats')?.addEventListener('click', () => {
+            const blob = new Blob([JSON.stringify(state.chats, null, 2)], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `dns-messenger-chats-${Date.now()}.json`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        });
+    }
+    if (id === 'data') {
+        byId('reset-storage')?.addEventListener('click', () => {
+            if (!confirm('Удалить все локальные данные и настройки?')) return;
+            localStorage.clear();
+            location.reload();
+        });
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2423,9 +2707,12 @@ socket.on('message', (msg) => {
 
     // Notify (sound + vibration + desktop) — but not for own messages echo
     if (msg.from !== state.username) {
-        playMessageSound();
-        vibrate(100);
-        showDesktopNotification(msg.from, msg.text || '');
+        if (getSetting('notifSound', true)) playMessageSound();
+        if (getSetting('notifVibro', true)) vibrate(100);
+        if (getSetting('notifDesktop', true)) {
+            const preview = getSetting('msgPreview', true) ? (msg.text || '') : 'Новое сообщение';
+            showDesktopNotification(msg.from, preview);
+        }
     }
 
     renderChatList();
@@ -2453,12 +2740,12 @@ socket.on('file', (info) => {
     if (state.currentChat?.id === info.from) renderMessages();
 
     // Notify
-    playMessageSound();
-    vibrate(100);
+    if (getSetting('notifSound', true)) playMessageSound();
+    if (getSetting('notifVibro', true)) vibrate(100);
     const label = isVoice ? t('voice_from', info.from)
                  : isVideoMsg ? `Видеосообщение от ${info.from}`
                  : t('file_from', info.from, info.name);
-    showDesktopNotification(info.from, label);
+    if (getSetting('notifDesktop', true)) showDesktopNotification(info.from, label);
     toast(label, 'info');
 });
 
@@ -2508,9 +2795,15 @@ function updateConnectionStatus() {
 
 // ── Input handling ──────────────────────────────────────────────────
 $msgInput?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
+    const enterSend = getSetting('enterSend', true);
+    if (e.key === 'Enter') {
+        if (enterSend && !e.shiftKey && !e.ctrlKey) {
+            e.preventDefault();
+            sendMessage();
+        } else if (!enterSend && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            sendMessage();
+        }
     }
 });
 
