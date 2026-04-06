@@ -2380,3 +2380,51 @@ html[data-wallpaper="aurora"] #messages {
     .settings-tab span:not(.settings-tab-icon) { display: none; }
     .settings-content { padding: 16px; }
 }
+
+/* ─── Custom / solid wallpapers ───────────────────────────────────── */
+html[data-wallpaper="solid"] #messages {
+    background: var(--chat-wall-color, #0e1621) !important;
+    background-image: none !important;
+}
+html[data-wallpaper="custom"] #messages {
+    background-image: var(--chat-wall-image, none) !important;
+    background-size: cover !important;
+    background-position: center !important;
+    background-repeat: no-repeat !important;
+    background-attachment: local;
+}
+
+html[data-list-wallpaper="dots"] #chat-list {
+    background-image: radial-gradient(rgba(127,127,127,0.18) 1px, transparent 1px);
+    background-size: 18px 18px;
+}
+html[data-list-wallpaper="grid"] #chat-list {
+    background-image:
+        linear-gradient(rgba(127,127,127,0.12) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(127,127,127,0.12) 1px, transparent 1px);
+    background-size: 28px 28px;
+}
+html[data-list-wallpaper="aurora"] #chat-list {
+    background:
+        radial-gradient(circle at 15% 20%, rgba(0,168,132,0.15) 0%, transparent 45%),
+        radial-gradient(circle at 85% 80%, rgba(135,116,225,0.12) 0%, transparent 50%);
+}
+html[data-list-wallpaper="solid"] #chat-list {
+    background: var(--list-wall-color, #17212b) !important;
+}
+html[data-list-wallpaper="custom"] #chat-list {
+    background-image: var(--list-wall-image, none) !important;
+    background-size: cover !important;
+    background-position: center !important;
+    background-repeat: no-repeat !important;
+}
+
+/* Color picker styling */
+.set-color {
+    width: 44px; height: 32px;
+    border: 1px solid var(--border, #1f2c3a);
+    border-radius: 8px;
+    background: transparent;
+    cursor: pointer;
+    padding: 2px;
+}

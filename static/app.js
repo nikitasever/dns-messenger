@@ -1395,7 +1395,12 @@ const SETTINGS_KEYS = {
     accent: 'dns_set_accent',            // green | blue | purple | orange | red
     fontScale: 'dns_set_font_scale',     // 0.9 | 1 | 1.1 | 1.2
     animations: 'dns_set_animations',
-    chatWallpaper: 'dns_set_wallpaper',  // none | dots | grid | aurora
+    chatWallpaper: 'dns_set_wallpaper',  // none | dots | grid | aurora | solid | custom
+    chatWallpaperColor: 'dns_set_wallpaper_color',
+    chatWallpaperImage: 'dns_set_wallpaper_image',  // data URL
+    listWallpaper: 'dns_set_list_wallpaper',        // none | dots | grid | aurora | solid | custom
+    listWallpaperColor: 'dns_set_list_wallpaper_color',
+    listWallpaperImage: 'dns_set_list_wallpaper_image',
 };
 function getSetting(key, def) {
     const v = localStorage.getItem(SETTINGS_KEYS[key] || key);
@@ -1414,11 +1419,21 @@ function applySettings() {
     const scale = parseFloat(getSetting('fontScale', '1')) || 1;
     const animOn = getSetting('animations', true);
     const wall = getSetting('chatWallpaper', 'none');
+    const wallColor = getSetting('chatWallpaperColor', '#0e1621');
+    const wallImg = getSetting('chatWallpaperImage', '');
+    const listWall = getSetting('listWallpaper', 'none');
+    const listWallColor = getSetting('listWallpaperColor', '#17212b');
+    const listWallImg = getSetting('listWallpaperImage', '');
     const root = document.documentElement;
     root.dataset.theme = theme;
     root.dataset.accent = accent;
     root.dataset.wallpaper = wall;
+    root.dataset.listWallpaper = listWall;
     root.style.setProperty('--font-scale', scale);
+    root.style.setProperty('--chat-wall-color', wallColor);
+    root.style.setProperty('--chat-wall-image', wallImg ? `url("${wallImg}")` : 'none');
+    root.style.setProperty('--list-wall-color', listWallColor);
+    root.style.setProperty('--list-wall-image', listWallImg ? `url("${listWallImg}")` : 'none');
     root.classList.toggle('no-anim', !animOn);
 }
 applySettings();
@@ -1555,12 +1570,51 @@ function buildSettingsSection(id) {
                 { val: 'orange', label: '🟠' },
                 { val: 'red',    label: '🔴' },
             ])}
-            ${selectRow('Фон чата', 'chatWallpaper', 'none', [
-                { val: 'none',   label: 'Без фона' },
+            ${selectRow('Фон переписки', 'chatWallpaper', 'none', [
+                { val: 'none',   label: 'По умолчанию' },
                 { val: 'dots',   label: 'Точки' },
                 { val: 'grid',   label: 'Сетка' },
                 { val: 'aurora', label: 'Сияние' },
+                { val: 'solid',  label: 'Цвет' },
+                { val: 'custom', label: 'Изображение' },
             ])}
+            <div class="set-row">
+                <div class="set-label">Цвет фона переписки</div>
+                <input type="color" class="set-color" data-color-key="chatWallpaperColor" value="${getSetting('chatWallpaperColor', '#0e1621')}">
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Своё изображение (переписка)</div>
+                    <div class="set-hint">Сохраняется локально, до ~1 МБ</div>
+                </div>
+                <div style="display:flex;gap:8px">
+                    <button class="btn btn-secondary" id="upload-chat-wall">Загрузить</button>
+                    <button class="btn btn-secondary" id="clear-chat-wall">Сбросить</button>
+                </div>
+            </div>
+
+            ${selectRow('Фон списка чатов', 'listWallpaper', 'none', [
+                { val: 'none',   label: 'По умолчанию' },
+                { val: 'dots',   label: 'Точки' },
+                { val: 'grid',   label: 'Сетка' },
+                { val: 'aurora', label: 'Сияние' },
+                { val: 'solid',  label: 'Цвет' },
+                { val: 'custom', label: 'Изображение' },
+            ])}
+            <div class="set-row">
+                <div class="set-label">Цвет фона списка</div>
+                <input type="color" class="set-color" data-color-key="listWallpaperColor" value="${getSetting('listWallpaperColor', '#17212b')}">
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Своё изображение (список чатов)</div>
+                    <div class="set-hint">Сохраняется локально, до ~1 МБ</div>
+                </div>
+                <div style="display:flex;gap:8px">
+                    <button class="btn btn-secondary" id="upload-list-wall">Загрузить</button>
+                    <button class="btn btn-secondary" id="clear-list-wall">Сбросить</button>
+                </div>
+            </div>
         `;
     }
     if (id === 'chats') {
@@ -1667,6 +1721,48 @@ function wireSettingsSection(id, root, overlay) {
     });
 
     const byId = (id) => root.querySelector('#' + id);
+    // Color pickers
+    root.querySelectorAll('.set-color').forEach(inp => {
+        inp.addEventListener('input', () => setSetting(inp.dataset.colorKey, inp.value));
+    });
+
+    if (id === 'appear') {
+        const pickImage = (storageKey, wallKey) => {
+            const inp = document.createElement('input');
+            inp.type = 'file';
+            inp.accept = 'image/*';
+            inp.onchange = () => {
+                const f = inp.files?.[0];
+                if (!f) return;
+                if (f.size > 1024 * 1024) { toast('Файл слишком большой (макс 1 МБ)', 'error'); return; }
+                const reader = new FileReader();
+                reader.onload = () => {
+                    try {
+                        localStorage.setItem(SETTINGS_KEYS[storageKey], reader.result);
+                        setSetting(wallKey, 'custom');
+                        toast('Фон обновлён', 'success');
+                    } catch (e) {
+                        toast('Недостаточно места в хранилище', 'error');
+                    }
+                };
+                reader.readAsDataURL(f);
+            };
+            inp.click();
+        };
+        byId('upload-chat-wall')?.addEventListener('click', () => pickImage('chatWallpaperImage', 'chatWallpaper'));
+        byId('clear-chat-wall')?.addEventListener('click', () => {
+            localStorage.removeItem(SETTINGS_KEYS.chatWallpaperImage);
+            setSetting('chatWallpaper', 'none');
+            toast('Сброшено', 'success');
+        });
+        byId('upload-list-wall')?.addEventListener('click', () => pickImage('listWallpaperImage', 'listWallpaper'));
+        byId('clear-list-wall')?.addEventListener('click', () => {
+            localStorage.removeItem(SETTINGS_KEYS.listWallpaperImage);
+            setSetting('listWallpaper', 'none');
+            toast('Сброшено', 'success');
+        });
+    }
+
     if (id === 'notif') {
         byId('test-notif')?.addEventListener('click', () => { playMessageSound(); vibrate(120); });
     }
