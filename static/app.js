@@ -615,7 +615,24 @@ function renderMessages() {
         }
         const checkHtml = isMine ? `<span class="msg-status${msg.read ? ' read' : ''}">${msg.read ? '\u2713\u2713' : '\u2713'}</span>` : '';
 
-        if (msg.voice) {
+        if (msg.videoMsg) {
+            div.className = `message ${isMine ? 'sent' : 'received'} video-msg-wrap${isNew ? ' first' : ''}`;
+            const dur = msg.duration || 0;
+            const durStr = Math.floor(dur / 60) + ':' + (dur % 60).toString().padStart(2, '0');
+            div.innerHTML = `
+                ${!isMine && isGroup && isNew ? `<div class="sender" style="color:${avatarColor(msg.from)[0]}">${esc(msg.from)}</div>` : ''}
+                <div class="video-msg" data-fid="${msg.fid || ''}" data-from="${esc(msg.from)}" data-file="${esc(msg.file)}">
+                    <video playsinline></video>
+                    <button class="video-play-btn" onclick="playVideoMsg(this)">&#x25B6;</button>
+                    <span class="video-duration">${durStr}</span>
+                </div>
+                <div class="msg-footer">
+                    <span class="msg-time">${formatTime(msg.ts)}</span>
+                    ${checkHtml}
+                </div>
+                ${reactionsHtml}
+            `;
+        } else if (msg.voice) {
             // Voice message
             div.className = `message ${isMine ? 'sent' : 'received'}${isNew ? ' first' : ''}`;
             const dur = msg.duration || 0;
@@ -1626,6 +1643,160 @@ async function sendVoiceMessage(blob, duration) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Video messages — round Telegram-like clips with audio
+// ═══════════════════════════════════════════════════════════════════
+const videoState = {
+    recording: false, mediaRecorder: null, chunks: [], stream: null,
+    startTime: null, timerInterval: null, previewEl: null,
+};
+const $videoBtn = document.getElementById('video-rec-btn');
+
+async function toggleVideoRecord() {
+    if (videoState.recording) stopVideoRecord();
+    else startVideoRecord();
+}
+
+async function startVideoRecord() {
+    if (!state.currentChat || state.currentChat.type !== 'dm') {
+        toast(t('voice_dm_only') || 'Только в личных чатах', 'info');
+        return;
+    }
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 320, height: 320, facingMode: 'user' },
+            audio: true,
+        });
+        videoState.stream = stream;
+        videoState.chunks = [];
+
+        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+            ? 'video/webm;codecs=vp9,opus'
+            : (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+                ? 'video/webm;codecs=vp8,opus' : 'video/webm');
+        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 500000 });
+        videoState.mediaRecorder = recorder;
+
+        recorder.ondataavailable = (e) => { if (e.data.size > 0) videoState.chunks.push(e.data); };
+        recorder.onstop = () => {
+            const blob = new Blob(videoState.chunks, { type: 'video/webm' });
+            const duration = Math.round((Date.now() - videoState.startTime) / 1000);
+            sendVideoMessage(blob, duration);
+            videoState.stream?.getTracks().forEach(t => t.stop());
+            videoState.stream = null;
+            hideVideoPreview();
+        };
+
+        recorder.start(100);
+        videoState.recording = true;
+        videoState.startTime = Date.now();
+        $videoBtn?.classList.add('recording');
+        showVideoPreview(stream);
+
+        // Auto-stop at 60s
+        setTimeout(() => { if (videoState.recording) stopVideoRecord(); }, 60000);
+    } catch (e) {
+        showMediaError('video messages');
+    }
+}
+
+function stopVideoRecord(cancel) {
+    if (!videoState.recording) return;
+    videoState.recording = false;
+    $videoBtn?.classList.remove('recording');
+    if (cancel) {
+        try { videoState.mediaRecorder.stop(); } catch(e) {}
+        videoState.chunks = [];
+        videoState.stream?.getTracks().forEach(t => t.stop());
+        videoState.stream = null;
+        hideVideoPreview();
+        return;
+    }
+    if (videoState.mediaRecorder?.state === 'recording') videoState.mediaRecorder.stop();
+}
+
+function showVideoPreview(stream) {
+    hideVideoPreview();
+    const wrap = document.createElement('div');
+    wrap.className = 'video-rec-preview';
+    wrap.id = 'video-rec-preview';
+    wrap.innerHTML = `
+        <video autoplay muted playsinline></video>
+        <div class="rec-dot"></div>
+        <div class="video-rec-timer" id="video-rec-timer">0:00</div>
+        <button class="video-rec-cancel" onclick="stopVideoRecord(true)">✕</button>
+        <button class="video-rec-stop" onclick="stopVideoRecord()">●</button>
+    `;
+    document.body.appendChild(wrap);
+    wrap.querySelector('video').srcObject = stream;
+    videoState.previewEl = wrap;
+    videoState.timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - videoState.startTime) / 1000);
+        const m = Math.floor(elapsed / 60);
+        const s = (elapsed % 60).toString().padStart(2, '0');
+        const el = document.getElementById('video-rec-timer');
+        if (el) el.textContent = `${m}:${s}`;
+    }, 500);
+}
+function hideVideoPreview() {
+    if (videoState.timerInterval) { clearInterval(videoState.timerInterval); videoState.timerInterval = null; }
+    if (videoState.previewEl) { videoState.previewEl.remove(); videoState.previewEl = null; }
+}
+
+async function sendVideoMessage(blob, duration) {
+    if (!state.currentChat) return;
+    if (blob.size > 4 * 1024 * 1024) { toast('Видео слишком большое (макс 4 МБ)', 'error'); return; }
+    const ts = Date.now();
+    const filename = `videomsg_${ts}.webm`;
+    addMessage(state.currentChat.id, {
+        from: state.username, videoMsg: true, file: filename,
+        size: blob.size, duration, ts,
+    });
+    renderMessages();
+    renderChatList();
+    const fd = new FormData();
+    fd.append('to', state.currentChat.id);
+    fd.append('file', blob, filename);
+    try {
+        const res = await fetch('/api/file/send', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.ok) toast(res.error || t('send_error'), 'error');
+    } catch (e) { toast(t('server_unavailable'), 'error'); }
+}
+
+async function playVideoMsg(btn) {
+    const wrap = btn.closest('.video-msg');
+    const fid = wrap.dataset.fid, from = wrap.dataset.from, file = wrap.dataset.file;
+    if (!fid) { toast(t('voice_unavailable'), 'info'); return; }
+    const videoEl = wrap.querySelector('video');
+    if (videoEl.dataset.loaded === '1') {
+        if (videoEl.paused) videoEl.play(); else videoEl.pause();
+        return;
+    }
+    btn.innerHTML = '⏳';
+    try {
+        const res = await fetch('/api/file/download', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fid, from, filename: file }),
+        }).then(r => r.json());
+        if (res.ok && res.data) {
+            const binary = atob(res.data);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const blob = new Blob([bytes], { type: 'video/webm' });
+            videoEl.src = URL.createObjectURL(blob);
+            videoEl.dataset.loaded = '1';
+            videoEl.play();
+            btn.style.display = 'none';
+        } else {
+            toast(t('voice_load_err'), 'error');
+            btn.innerHTML = '▶';
+        }
+    } catch (e) {
+        toast(t('file_dl_err'), 'error');
+        btn.innerHTML = '▶';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Context Menu, Reactions, Deletion
 // ═══════════════════════════════════════════════════════════════════
 
@@ -2265,10 +2436,12 @@ socket.on('file', (info) => {
     const chat = ensureChat(info.from, 'dm', info.from);
     const ts = Date.now();
     const isVoice = info.name && info.name.startsWith('voice_') && info.name.endsWith('.webm');
+    const isVideoMsg = info.name && info.name.startsWith('videomsg_') && info.name.endsWith('.webm');
     const msg = {
         from: info.from, file: info.name, size: info.size, fid: info.fid, ts,
     };
     if (isVoice) msg.voice = true;
+    if (isVideoMsg) msg.videoMsg = true;
     addMessage(info.from, msg);
 
     if (!state.currentChat || state.currentChat.id !== info.from) {
@@ -2282,7 +2455,9 @@ socket.on('file', (info) => {
     // Notify
     playMessageSound();
     vibrate(100);
-    const label = isVoice ? t('voice_from', info.from) : t('file_from', info.from, info.name);
+    const label = isVoice ? t('voice_from', info.from)
+                 : isVideoMsg ? `Видеосообщение от ${info.from}`
+                 : t('file_from', info.from, info.name);
     showDesktopNotification(info.from, label);
     toast(label, 'info');
 });
