@@ -2428,3 +2428,83 @@ html[data-list-wallpaper="custom"] #chat-list {
     cursor: pointer;
     padding: 2px;
 }
+
+/* ─── Telegram-like preset gradient wallpapers ────────────────────── */
+@keyframes wallShift {
+    0%, 100% { background-position: 0% 50%; }
+    50%      { background-position: 100% 50%; }
+}
+
+/* Chat area presets */
+html[data-wallpaper="sunset"] #messages {
+    background: linear-gradient(135deg, #ff9a8b 0%, #ff6a88 25%, #ff99ac 50%, #fccb90 100%) !important;
+    background-size: 400% 400%;
+    animation: wallShift 18s ease infinite;
+}
+html[data-wallpaper="ocean"] #messages {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 50%, #43cea2 100%) !important;
+    background-size: 400% 400%;
+    animation: wallShift 22s ease infinite;
+}
+html[data-wallpaper="forest"] #messages {
+    background: linear-gradient(135deg, #134e5e 0%, #71b280 50%, #a8e063 100%) !important;
+    background-size: 400% 400%;
+    animation: wallShift 24s ease infinite;
+}
+html[data-wallpaper="candy"] #messages {
+    background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 40%, #fad0c4 70%, #a18cd1 100%) !important;
+    background-size: 400% 400%;
+    animation: wallShift 20s ease infinite;
+}
+html[data-wallpaper="nebula"] #messages {
+    background: linear-gradient(135deg, #0f0c29 0%, #302b63 45%, #24243e 70%, #6a11cb 100%) !important;
+    background-size: 400% 400%;
+    animation: wallShift 25s ease infinite;
+}
+html[data-wallpaper="emerald"] #messages {
+    background: linear-gradient(135deg, #0b3d2e 0%, #006466 35%, #1b998b 70%, #2dd4bf 100%) !important;
+    background-size: 400% 400%;
+    animation: wallShift 22s ease infinite;
+}
+
+/* Message bubbles look better with a subtle backdrop on gradients */
+html[data-wallpaper="sunset"] .message,
+html[data-wallpaper="ocean"]  .message,
+html[data-wallpaper="forest"] .message,
+html[data-wallpaper="candy"]  .message,
+html[data-wallpaper="nebula"] .message,
+html[data-wallpaper="emerald"] .message {
+    backdrop-filter: blur(2px);
+}
+
+/* Chat list presets */
+html[data-list-wallpaper="sunset"] #chat-list {
+    background: linear-gradient(160deg, #ff9a8b 0%, #ff6a88 50%, #fccb90 100%) !important;
+    background-size: 300% 300%;
+    animation: wallShift 20s ease infinite;
+}
+html[data-list-wallpaper="ocean"] #chat-list {
+    background: linear-gradient(160deg, #4facfe 0%, #00f2fe 60%, #43cea2 100%) !important;
+    background-size: 300% 300%;
+    animation: wallShift 22s ease infinite;
+}
+html[data-list-wallpaper="forest"] #chat-list {
+    background: linear-gradient(160deg, #134e5e 0%, #71b280 100%) !important;
+    background-size: 300% 300%;
+    animation: wallShift 24s ease infinite;
+}
+html[data-list-wallpaper="candy"] #chat-list {
+    background: linear-gradient(160deg, #ff9a9e 0%, #fecfef 50%, #a18cd1 100%) !important;
+    background-size: 300% 300%;
+    animation: wallShift 20s ease infinite;
+}
+html[data-list-wallpaper="nebula"] #chat-list {
+    background: linear-gradient(160deg, #0f0c29 0%, #302b63 50%, #6a11cb 100%) !important;
+    background-size: 300% 300%;
+    animation: wallShift 25s ease infinite;
+}
+html[data-list-wallpaper="emerald"] #chat-list {
+    background: linear-gradient(160deg, #0b3d2e 0%, #1b998b 60%, #2dd4bf 100%) !important;
+    background-size: 300% 300%;
+    animation: wallShift 22s ease infinite;
+}

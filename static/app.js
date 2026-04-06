@@ -1571,12 +1571,18 @@ function buildSettingsSection(id) {
                 { val: 'red',    label: '🔴' },
             ])}
             ${selectRow('Фон переписки', 'chatWallpaper', 'none', [
-                { val: 'none',   label: 'По умолчанию' },
-                { val: 'dots',   label: 'Точки' },
-                { val: 'grid',   label: 'Сетка' },
-                { val: 'aurora', label: 'Сияние' },
-                { val: 'solid',  label: 'Цвет' },
-                { val: 'custom', label: 'Изображение' },
+                { val: 'none',    label: 'По умолчанию' },
+                { val: 'dots',    label: 'Точки' },
+                { val: 'grid',    label: 'Сетка' },
+                { val: 'aurora',  label: 'Сияние' },
+                { val: 'sunset',  label: '🌅 Закат' },
+                { val: 'ocean',   label: '🌊 Океан' },
+                { val: 'forest',  label: '🌲 Лес' },
+                { val: 'candy',   label: '🍬 Карамель' },
+                { val: 'nebula',  label: '🌌 Туманность' },
+                { val: 'emerald', label: '💚 Изумруд' },
+                { val: 'solid',   label: 'Цвет' },
+                { val: 'custom',  label: 'Изображение' },
             ])}
             <div class="set-row">
                 <div class="set-label">Цвет фона переписки</div>
@@ -1594,12 +1600,18 @@ function buildSettingsSection(id) {
             </div>
 
             ${selectRow('Фон списка чатов', 'listWallpaper', 'none', [
-                { val: 'none',   label: 'По умолчанию' },
-                { val: 'dots',   label: 'Точки' },
-                { val: 'grid',   label: 'Сетка' },
-                { val: 'aurora', label: 'Сияние' },
-                { val: 'solid',  label: 'Цвет' },
-                { val: 'custom', label: 'Изображение' },
+                { val: 'none',    label: 'По умолчанию' },
+                { val: 'dots',    label: 'Точки' },
+                { val: 'grid',    label: 'Сетка' },
+                { val: 'aurora',  label: 'Сияние' },
+                { val: 'sunset',  label: '🌅 Закат' },
+                { val: 'ocean',   label: '🌊 Океан' },
+                { val: 'forest',  label: '🌲 Лес' },
+                { val: 'candy',   label: '🍬 Карамель' },
+                { val: 'nebula',  label: '🌌 Туманность' },
+                { val: 'emerald', label: '💚 Изумруд' },
+                { val: 'solid',   label: 'Цвет' },
+                { val: 'custom',  label: 'Изображение' },
             ])}
             <div class="set-row">
                 <div class="set-label">Цвет фона списка</div>
