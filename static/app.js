@@ -680,7 +680,12 @@ function renderMessages() {
             swipeStartX = t0.clientX;
             swipeStartY = t0.clientY;
             swipeDX = 0; swiping = true; swipeFired = false;
-            longPressTimer = setTimeout(() => { showContextMenu(t0, msg); swiping = false; }, 500);
+            div.classList.add('holding');
+            longPressTimer = setTimeout(() => {
+                navigator.vibrate?.(15);
+                showContextMenu(t0, msg);
+                swiping = false;
+            }, 500);
         }, { passive: true });
         div.addEventListener('touchmove', (e) => {
             if (!swiping) return;
@@ -702,6 +707,7 @@ function renderMessages() {
         }, { passive: true });
         div.addEventListener('touchend', () => {
             clearTimeout(longPressTimer);
+            div.classList.remove('holding');
             div.style.transition = 'transform 0.25s ease';
             div.style.transform = '';
             setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
@@ -711,13 +717,17 @@ function renderMessages() {
 
         // Mouse drag swipe (desktop)
         let mDown = false, mStartX = 0, mFired = false;
+        let mHoldTimer;
         div.addEventListener('mousedown', (e) => {
             if (e.button !== 0) return;
             mDown = true; mStartX = e.clientX; mFired = false;
+            div.classList.add('holding');
+            mHoldTimer = setTimeout(() => { showContextMenu(e, msg); }, 500);
         });
         div.addEventListener('mousemove', (e) => {
             if (!mDown) return;
             const dx = e.clientX - mStartX;
+            if (Math.abs(dx) > 6) clearTimeout(mHoldTimer);
             if (Math.sign(dx) !== swipeDir && dx !== 0) return;
             const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
             div.style.transform = `translateX(${damped}px)`;
@@ -729,6 +739,8 @@ function renderMessages() {
         const mUp = () => {
             if (!mDown) return;
             mDown = false;
+            clearTimeout(mHoldTimer);
+            div.classList.remove('holding');
             div.style.transition = 'transform 0.25s ease';
             div.style.transform = '';
             setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
