@@ -24,6 +24,14 @@
             background: radial-gradient(circle at 25% 35%, rgba(135,116,225,0.06) 0%, transparent 50%),
                         radial-gradient(circle at 75% 65%, rgba(77,205,94,0.04) 0%, transparent 50%);
         }
+        .lang-switch {
+            position: fixed; top: 16px; right: 18px; z-index: 10;
+            background: var(--card); border: 1px solid var(--border);
+            color: var(--sec); font: inherit; font-size: 13px; font-weight: 600;
+            padding: 8px 14px; border-radius: 20px; cursor: pointer;
+            transition: 0.2s; display: flex; align-items: center; gap: 6px;
+        }
+        .lang-switch:hover { color: var(--text); border-color: var(--accent); transform: translateY(-1px); }
         .login-card {
             background: var(--card); border: 1px solid var(--border); border-radius: 16px;
             padding: 40px 36px; width: 420px; max-width: 94vw; text-align: center;
@@ -99,33 +107,34 @@
     </style>
 </head>
 <body>
+    <button class="lang-switch" id="lang-switch" onclick="toggleLang()">&#x1F310; <span id="lang-label">Русский</span></button>
     <div class="login-card">
         <div class="logo">&#x1F310;</div>
-        <h1>DNS Мессенджер</h1>
-        <p class="subtitle">Зашифрованный мессенджер через DNS-туннель</p>
+        <h1 id="t-title">DNS Мессенджер</h1>
+        <p class="subtitle" id="t-subtitle">Зашифрованный мессенджер через DNS-туннель</p>
 
         <!-- Mode tabs -->
         <div class="mode-tabs">
-            <button class="mode-tab active" data-mode="anonymous" onclick="setMode('anonymous')">Анонимно</button>
-            <button class="mode-tab" data-mode="register" onclick="setMode('register')">Регистрация</button>
-            <button class="mode-tab" data-mode="login" onclick="setMode('login')">Вход</button>
+            <button class="mode-tab active" data-mode="anonymous" onclick="setMode('anonymous')" id="t-tab-anon">Анонимно</button>
+            <button class="mode-tab" data-mode="register" onclick="setMode('register')" id="t-tab-reg">Регистрация</button>
+            <button class="mode-tab" data-mode="login" onclick="setMode('login')" id="t-tab-login">Вход</button>
         </div>
 
         <form id="login-form" onsubmit="return doLogin(event)">
             <div class="input-group">
-                <label>Имя пользователя</label>
+                <label id="t-user-label">Имя пользователя</label>
                 <input type="text" id="username" placeholder="Введите никнейм" autocomplete="off" autofocus required minlength="2" maxlength="20" pattern="[a-zA-Z0-9_]+">
                 <div class="input-hint" id="username-hint">Латинские буквы, цифры, подчёркивание. 2–20 символов.</div>
             </div>
 
             <div class="input-group pw-field" id="pw-field">
-                <label>Пароль</label>
+                <label id="t-pw-label">Пароль</label>
                 <input type="password" id="password" placeholder="Введите пароль" autocomplete="off">
                 <div class="input-hint" id="pw-hint">Минимум 4 символа</div>
             </div>
 
             <details class="server-toggle">
-                <summary>Настройки сервера</summary>
+                <summary id="t-server-summary">Настройки сервера</summary>
                 <div class="fields">
                     <input type="text" id="server-ip" placeholder="IP сервера" value="{{ server_ip }}">
                     <input type="number" id="server-port" placeholder="Порт" value="{{ server_port }}" style="max-width:100px">
@@ -136,23 +145,99 @@
             <div class="error-msg" id="error-msg"></div>
         </form>
 
-        <div class="info-box" id="info-box">
-            <strong>&#x1F512;</strong> <span class="anon-info">Анонимный режим: пароль не требуется, но никнейм может занять кто угодно. Для защищённого аккаунта выберите <strong>Регистрация</strong>.</span>
-        </div>
+        <div class="info-box" id="info-box"></div>
 
         <div class="features-row">
             <span class="feature">&#x1F512; E2E</span>
-            <span class="feature">&#x1F310; DNS-туннель</span>
-            <span class="feature">&#x1F465; Группы</span>
-            <span class="feature">&#x1F4CE; Файлы</span>
+            <span class="feature">&#x1F310; <span id="t-feat-dns">DNS-туннель</span></span>
+            <span class="feature">&#x1F465; <span id="t-feat-groups">Группы</span></span>
+            <span class="feature">&#x1F4CE; <span id="t-feat-files">Файлы</span></span>
         </div>
     </div>
 
     <script>
+        const I18N = {
+            ru: {
+                title: 'DNS Мессенджер',
+                subtitle: 'Зашифрованный мессенджер через DNS-туннель',
+                tab_anon: 'Анонимно', tab_reg: 'Регистрация', tab_login: 'Вход',
+                user_label: 'Имя пользователя', user_ph: 'Введите никнейм',
+                user_hint: 'Латинские буквы, цифры, подчёркивание. 2–20 символов.',
+                pw_label: 'Пароль', pw_ph: 'Введите пароль',
+                pw_hint_anon: 'Минимум 4 символа',
+                pw_hint_reg: 'Минимум 4 символа. Хранится защищённо на сервере.',
+                pw_hint_login: 'Введите ваш пароль',
+                server_summary: 'Настройки сервера',
+                server_ip_ph: 'IP сервера', server_port_ph: 'Порт',
+                btn_anon: 'Войти анонимно', btn_reg: 'Создать аккаунт', btn_login: 'Войти',
+                info_anon: 'Анонимный режим: пароль не требуется, но никнейм может занять кто угодно. Для защищённого аккаунта выберите <strong>Регистрация</strong>.',
+                info_reg: 'Ключи шифрования создаются локально. Пароль защищает аккаунт от посторонних.',
+                info_login: 'Вход в зарегистрированный аккаунт. E2E-ключи хранятся на этом устройстве.',
+                feat_dns: 'DNS-туннель', feat_groups: 'Группы', feat_files: 'Файлы',
+                connecting: 'Подключение...', err_conn: 'Сервер недоступен', err_def: 'Ошибка подключения',
+                lang_label: 'Русский',
+            },
+            en: {
+                title: 'DNS Messenger',
+                subtitle: 'Encrypted messenger over a DNS tunnel',
+                tab_anon: 'Anonymous', tab_reg: 'Sign up', tab_login: 'Sign in',
+                user_label: 'Username', user_ph: 'Enter nickname',
+                user_hint: 'Latin letters, digits, underscore. 2–20 characters.',
+                pw_label: 'Password', pw_ph: 'Enter password',
+                pw_hint_anon: 'At least 4 characters',
+                pw_hint_reg: 'At least 4 characters. Stored securely on the server.',
+                pw_hint_login: 'Enter your password',
+                server_summary: 'Server settings',
+                server_ip_ph: 'Server IP', server_port_ph: 'Port',
+                btn_anon: 'Enter anonymously', btn_reg: 'Create account', btn_login: 'Sign in',
+                info_anon: 'Anonymous mode: no password required, but anyone can take this nickname. For a protected account choose <strong>Sign up</strong>.',
+                info_reg: 'Encryption keys are generated locally. The password protects your account from others.',
+                info_login: 'Sign in to a registered account. E2E keys are stored on this device.',
+                feat_dns: 'DNS tunnel', feat_groups: 'Groups', feat_files: 'Files',
+                connecting: 'Connecting...', err_conn: 'Server unavailable', err_def: 'Connection error',
+                lang_label: 'English',
+            },
+        };
+        let lang = localStorage.getItem('dns_lang') || 'ru';
+        function T() { return I18N[lang] || I18N.ru; }
+
+        function applyLang() {
+            const d = T();
+            document.documentElement.lang = lang;
+            document.title = d.title;
+            const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+            set('t-title', d.title);
+            set('t-subtitle', d.subtitle);
+            set('t-tab-anon', d.tab_anon);
+            set('t-tab-reg', d.tab_reg);
+            set('t-tab-login', d.tab_login);
+            set('t-user-label', d.user_label);
+            set('username-hint', d.user_hint);
+            set('t-pw-label', d.pw_label);
+            set('t-server-summary', d.server_summary);
+            set('t-feat-dns', d.feat_dns);
+            set('t-feat-groups', d.feat_groups);
+            set('t-feat-files', d.feat_files);
+            set('lang-label', d.lang_label);
+            document.getElementById('username').placeholder = d.user_ph;
+            document.getElementById('password').placeholder = d.pw_ph;
+            document.getElementById('server-ip').placeholder = d.server_ip_ph;
+            document.getElementById('server-port').placeholder = d.server_port_ph;
+            // Refresh mode-dependent text
+            setMode(mode);
+        }
+
+        function toggleLang() {
+            lang = lang === 'ru' ? 'en' : 'ru';
+            localStorage.setItem('dns_lang', lang);
+            applyLang();
+        }
+
         let mode = 'anonymous';
 
         function setMode(m) {
             mode = m;
+            const d = T();
             document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === m));
             const pwField = document.getElementById('pw-field');
             const btn = document.getElementById('btn-login');
@@ -163,25 +248,27 @@
             if (m === 'anonymous') {
                 pwField.classList.remove('show');
                 pwInput.required = false;
-                btn.textContent = 'Войти анонимно';
-                info.innerHTML = '<strong>&#x1F512;</strong> <span class="anon-info">Анонимный режим: пароль не требуется, но никнейм может занять кто угодно. Для защищённого аккаунта выберите <strong>Регистрация</strong>.</span>';
+                btn.textContent = d.btn_anon;
+                pwHint.textContent = d.pw_hint_anon;
+                info.innerHTML = '<strong>&#x1F512;</strong> <span class="anon-info">' + d.info_anon + '</span>';
             } else if (m === 'register') {
                 pwField.classList.add('show');
                 pwInput.required = true;
-                pwHint.textContent = 'Минимум 4 символа. Хранится защищённо на сервере.';
-                btn.textContent = 'Создать аккаунт';
-                info.innerHTML = '<strong>&#x1F512;</strong> Ключи шифрования создаются локально. Пароль защищает аккаунт от посторонних.';
+                pwHint.textContent = d.pw_hint_reg;
+                btn.textContent = d.btn_reg;
+                info.innerHTML = '<strong>&#x1F512;</strong> ' + d.info_reg;
             } else {
                 pwField.classList.add('show');
                 pwInput.required = true;
-                pwHint.textContent = 'Введите ваш пароль';
-                btn.textContent = 'Войти';
-                info.innerHTML = '<strong>&#x1F512;</strong> Вход в зарегистрированный аккаунт. E2E-ключи хранятся на этом устройстве.';
+                pwHint.textContent = d.pw_hint_login;
+                btn.textContent = d.btn_login;
+                info.innerHTML = '<strong>&#x1F512;</strong> ' + d.info_login;
             }
         }
 
         async function doLogin(e) {
             e.preventDefault();
+            const d = T();
             const btn = document.getElementById('btn-login');
             const errEl = document.getElementById('error-msg');
             const username = document.getElementById('username').value.trim();
@@ -190,7 +277,7 @@
             if (!username) return;
             btn.disabled = true;
             const origText = btn.textContent;
-            btn.textContent = 'Подключение...';
+            btn.textContent = d.connecting;
             errEl.style.display = 'none';
 
             try {
@@ -203,18 +290,20 @@
                 if (res.ok) {
                     window.location.href = '/';
                 } else {
-                    errEl.textContent = res.error || 'Ошибка подключения';
+                    errEl.textContent = res.error || d.err_def;
                     errEl.style.display = 'block';
                     btn.disabled = false;
                     btn.textContent = origText;
                 }
             } catch (err) {
-                errEl.textContent = 'Сервер недоступен';
+                errEl.textContent = d.err_conn;
                 errEl.style.display = 'block';
                 btn.disabled = false;
                 btn.textContent = origText;
             }
         }
+
+        applyLang();
     </script>
 </body>
 </html>
