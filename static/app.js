@@ -2193,10 +2193,12 @@ async function playVideoMsg(btn) {
 // ═══════════════════════════════════════════════════════════════════
 
 let ctxTargetMsg = null;
+let ctxOpenedAt = 0;
 const $ctxMenu = document.getElementById('msg-context-menu');
 
 function showContextMenu(e, msg) {
     ctxTargetMsg = msg;
+    ctxOpenedAt = Date.now();
     if (!$ctxMenu) return;
 
     // Highlight selected message
@@ -2244,9 +2246,10 @@ function startReply(msg) {
     }
 }
 
-// Close on click outside
+// Close on click outside (but ignore the mouseup/click that opened the menu)
 document.addEventListener('click', (e) => {
     if ($ctxMenu?.classList.contains('show') && !$ctxMenu.contains(e.target)) {
+        if (Date.now() - ctxOpenedAt < 350) return;
         hideContextMenu();
     }
 });
