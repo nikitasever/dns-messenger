@@ -12,7 +12,7 @@ const I18N = {
         search: 'Поиск',
         tab_all: 'Все', tab_personal: 'Личные', tab_groups: 'Группы',
         menu: 'Меню', contacts: 'Контакты', new_group: 'Новая группа', new_chat: 'Новый чат',
-        privacy: 'Конфиденциальность', logout: 'Выйти', admin_panel: 'Админ-панель',
+        privacy: 'Настройки', logout: 'Выйти', admin_panel: 'Админ-панель',
         change_photo: 'Сменить фото', online: 'в сети',
         // Chat area
         empty_title: 'DNS Tunnel Мессенджер',
@@ -90,7 +90,7 @@ const I18N = {
         search: 'Search',
         tab_all: 'All', tab_personal: 'Personal', tab_groups: 'Groups',
         menu: 'Menu', contacts: 'Contacts', new_group: 'New Group', new_chat: 'New Chat',
-        privacy: 'Privacy', logout: 'Log Out', admin_panel: 'Admin Panel',
+        privacy: 'Settings', logout: 'Log Out', admin_panel: 'Admin Panel',
         change_photo: 'Change photo', online: 'online',
         empty_title: 'DNS Tunnel Messenger',
         empty_desc: 'Encrypted messages via DNS queries. Works even during internet shutdowns.',
