@@ -2050,13 +2050,14 @@ input[type="text"]:focus, input[type="password"]:focus {
 
 /* ─── Holding (long-press) floating animation ─────────────────────── */
 @keyframes holdFloat {
-    0%   { transform: scale(1)    translateY(0); box-shadow: 0 0 0 rgba(0,168,132,0); }
-    50%  { transform: scale(1.04) translateY(-3px); box-shadow: 0 8px 22px rgba(0,168,132,0.35); }
-    100% { transform: scale(1.03) translateY(-2px); box-shadow: 0 6px 18px rgba(0,168,132,0.30); }
+    0%, 100% { transform: scale(1.05) translateY(-4px); box-shadow: 0 10px 28px rgba(0,168,132,0.45); }
+    50%      { transform: scale(1.07) translateY(-8px); box-shadow: 0 16px 36px rgba(0,168,132,0.60); }
 }
-.message.holding {
-    animation: holdFloat 0.45s ease forwards;
+.message.holding,
+.message.holding:hover {
+    animation: holdFloat 1.3s ease-in-out infinite !important;
     z-index: 5;
     position: relative;
     border-radius: 10px;
+    transition: none !important;
 }
