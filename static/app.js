@@ -2,6 +2,271 @@
 
 const socket = io();
 
+// ═══════════════════════════════════════════════════════════════════
+// i18n — Russian / English translations
+// ═══════════════════════════════════════════════════════════════════
+
+const I18N = {
+    ru: {
+        // Sidebar
+        search: 'Поиск',
+        tab_all: 'Все', tab_personal: 'Личные', tab_groups: 'Группы',
+        menu: 'Меню', contacts: 'Контакты', new_group: 'Новая группа', new_chat: 'Новый чат',
+        privacy: 'Конфиденциальность', logout: 'Выйти', admin_panel: 'Админ-панель',
+        change_photo: 'Сменить фото', online: 'в сети',
+        // Chat area
+        empty_title: 'DNS Tunnel Мессенджер',
+        empty_desc: 'Зашифрованные сообщения через DNS-запросы. Работает даже при отключениях интернета.',
+        message_placeholder: 'Сообщение', voice_msg_btn: 'Голосовое сообщение',
+        attach_file: 'Прикрепить файл', send: 'Отправить',
+        drop_file: 'Отпустите файл для отправки',
+        // Header
+        voice_call: 'Голосовой вызов', video_call: 'Видеозвонок', add_member: '+ Участник',
+        reconnecting: '(переподключение...)',
+        // Calls
+        calling: 'Вызов...', incoming_voice: 'Входящий вызов...', incoming_video: 'Входящий видеозвонок...',
+        call_voice: 'Голосовой вызов', call_video: 'Видеозвонок', call_ended: 'Звонок завершён',
+        call_only_dm: 'Звонки доступны только в личных чатах',
+        already_in_call: 'Вы уже в звонке',
+        call_busy: '{0} занят', call_declined: '{0} отклонил звонок',
+        call_no_connection: 'Не удалось установить соединение. Возможно, NAT/фаервол блокирует P2P',
+        call_error: 'Ошибка звонка',
+        mic_on: 'Включить микрофон', mic_off: 'Выключить микрофон',
+        cam_on: 'Включить камеру', cam_off: 'Выключить камеру',
+        no_camera: 'В этом звонке нет камеры',
+        reject_call: 'Отклонить', accept_voice: 'Голосом', accept_video_btn: 'Видео',
+        end_call: 'Завершить', cancel_call: 'Отмена',
+        // Context menu
+        reply: 'Ответить', copy: 'Копировать', delete: 'Удалить', info: 'Инфо',
+        deleted_msg: 'Сообщение удалено', copied: 'Скопировано', no_text_to_copy: 'Нет текста для копирования',
+        delete_msg_title: 'Удалить сообщение?',
+        delete_mine: 'Это сообщение отправлено вами.',
+        delete_theirs: 'Это сообщение от {0}.',
+        delete_for_me: 'Удалить у меня', delete_for_all: 'Удалить у всех',
+        cancel: 'Отмена', msg_deleted: 'Сообщение удалено', msg_deleted_all: 'Сообщение удалено у всех',
+        // Voice
+        voice_too_large: 'Голосовое сообщение слишком длинное (макс 512 КБ)',
+        voice_sent: 'Голосовое отправлено', voice_from: 'Голосовое от {0}',
+        voice_loading: 'Загрузка голосового...', voice_unavailable: 'Голосовое недоступно',
+        voice_load_err: 'Не удалось загрузить голосовое',
+        // Files
+        file_max: 'Макс. размер: 512 КБ (DNS-транспорт)',
+        file_sent: 'Файл отправлен', file_from: 'Файл от {0}: {1}',
+        file_send_err: 'Ошибка отправки файла', file_dl: 'Скачивание...',
+        file_downloaded: 'Файл скачан', file_dl_err: 'Ошибка скачивания',
+        // Common
+        loading: 'Загрузка...', server_unavailable: 'Сервер недоступен', send_error: 'Ошибка отправки',
+        connection_restored: 'Соединение восстановлено',
+        new_chat_title: 'Новый чат', username_field: 'Имя пользователя',
+        new_group_title: 'Новая группа', group_name_field: 'Название группы (латиница, цифры, _)',
+        invite_member: 'Пригласить участника', chat_created: 'Чат с {0} создан',
+        user_not_found: 'Пользователь "{0}" не найден', group_created: 'Группа "{0}" создана',
+        group_create_err: 'Не удалось создать группу', invited: '{0} приглашён',
+        invite_err: 'Не удалось пригласить',
+        joined_msg: '{0} присоединился к мессенджеру', invited_group: '{0} приглашён в группу',
+        no_users: 'Пока нет других пользователей',
+        contacts_err: 'Ошибка загрузки контактов',
+        file_too_large: 'Фото слишком большое (макс 100 КБ)',
+        photo_updated: 'Фото обновлено',
+        close: 'Закрыть', save: 'Сохранить', ok: 'ОК',
+        // Privacy
+        privacy_title: 'Конфиденциальность',
+        ls_visible_to: 'Кто может видеть время моего последнего захода:',
+        everyone: 'Все', nobody: 'Никто',
+        settings_saved: 'Настройки сохранены',
+        // Last seen
+        ls_recently: 'был(а) недавно', ls_just_now: 'был(а) только что',
+        ls_min: 'был(а) {0} мин назад', ls_hour: 'был(а) {0} ч назад', ls_date: 'был(а) {0}',
+        ls_online: 'в сети',
+        // Date/Notifs
+        message_deleted: 'Сообщение удалено',
+        allow_mic: 'Разрешите доступ к микрофону/камере в настройках браузера',
+        https_required: 'Для {0} Chrome требует HTTPS. Откройте https://{1} и примите сертификат',
+        calls_feature: 'звонков', voice_feature: 'голосовых сообщений',
+        language: 'Язык',
+    },
+    en: {
+        search: 'Search',
+        tab_all: 'All', tab_personal: 'Personal', tab_groups: 'Groups',
+        menu: 'Menu', contacts: 'Contacts', new_group: 'New Group', new_chat: 'New Chat',
+        privacy: 'Privacy', logout: 'Log Out', admin_panel: 'Admin Panel',
+        change_photo: 'Change photo', online: 'online',
+        empty_title: 'DNS Tunnel Messenger',
+        empty_desc: 'Encrypted messages via DNS queries. Works even during internet shutdowns.',
+        message_placeholder: 'Message', voice_msg_btn: 'Voice message',
+        attach_file: 'Attach file', send: 'Send',
+        drop_file: 'Drop file to send',
+        voice_call: 'Voice call', video_call: 'Video call', add_member: '+ Member',
+        reconnecting: '(reconnecting...)',
+        calling: 'Calling...', incoming_voice: 'Incoming voice call...', incoming_video: 'Incoming video call...',
+        call_voice: 'Voice call', call_video: 'Video call', call_ended: 'Call ended',
+        call_only_dm: 'Calls are only available in direct chats',
+        already_in_call: 'Already in a call',
+        call_busy: '{0} is busy', call_declined: '{0} declined the call',
+        call_no_connection: 'Could not establish a connection. NAT/firewall may block P2P',
+        call_error: 'Call error',
+        mic_on: 'Unmute', mic_off: 'Mute',
+        cam_on: 'Camera on', cam_off: 'Camera off',
+        no_camera: 'No camera in this call',
+        reject_call: 'Decline', accept_voice: 'Audio', accept_video_btn: 'Video',
+        end_call: 'End call', cancel_call: 'Cancel',
+        reply: 'Reply', copy: 'Copy', delete: 'Delete', info: 'Info',
+        deleted_msg: 'Message deleted', copied: 'Copied', no_text_to_copy: 'No text to copy',
+        delete_msg_title: 'Delete message?',
+        delete_mine: 'This message was sent by you.',
+        delete_theirs: 'This message is from {0}.',
+        delete_for_me: 'Delete for me', delete_for_all: 'Delete for everyone',
+        cancel: 'Cancel', msg_deleted: 'Message deleted', msg_deleted_all: 'Message deleted for everyone',
+        voice_too_large: 'Voice message too long (max 512 KB)',
+        voice_sent: 'Voice message sent', voice_from: 'Voice message from {0}',
+        voice_loading: 'Loading voice...', voice_unavailable: 'Voice message not available',
+        voice_load_err: 'Cannot load voice message',
+        file_max: 'Max size: 512 KB (DNS transport)',
+        file_sent: 'File sent', file_from: 'File from {0}: {1}',
+        file_send_err: 'File send error', file_dl: 'Downloading...',
+        file_downloaded: 'File downloaded', file_dl_err: 'Download error',
+        loading: 'Loading...', server_unavailable: 'Server unavailable', send_error: 'Send error',
+        connection_restored: 'Connection restored',
+        new_chat_title: 'New Chat', username_field: 'Username',
+        new_group_title: 'New Group', group_name_field: 'Group name (latin, digits, _)',
+        invite_member: 'Invite Member', chat_created: 'Chat with {0} created',
+        user_not_found: 'User "{0}" not found', group_created: 'Group "{0}" created',
+        group_create_err: 'Failed to create group', invited: '{0} invited',
+        invite_err: 'Failed to invite',
+        joined_msg: '{0} joined the messenger', invited_group: '{0} invited to group',
+        no_users: 'No other users online yet',
+        contacts_err: 'Error loading contacts',
+        file_too_large: 'Photo too large (max 100 KB)',
+        photo_updated: 'Photo updated',
+        close: 'Close', save: 'Save', ok: 'OK',
+        privacy_title: 'Privacy',
+        ls_visible_to: 'Who can see my last seen time:',
+        everyone: 'Everyone', nobody: 'Nobody',
+        settings_saved: 'Settings saved',
+        ls_recently: 'last seen recently', ls_just_now: 'last seen just now',
+        ls_min: 'last seen {0}m ago', ls_hour: 'last seen {0}h ago', ls_date: 'last seen {0}',
+        ls_online: 'online',
+        message_deleted: 'Message deleted',
+        allow_mic: 'Allow microphone/camera access in browser settings',
+        https_required: 'Chrome requires HTTPS for {0}. Open https://{1} and accept the certificate',
+        calls_feature: 'calls', voice_feature: 'voice messages',
+        language: 'Language',
+    },
+};
+
+let currentLang = localStorage.getItem('dns_lang') || 'ru';
+function t(key, ...args) {
+    const dict = I18N[currentLang] || I18N.ru;
+    let s = dict[key] || I18N.ru[key] || key;
+    args.forEach((a, i) => { s = s.replace(`{${i}}`, a); });
+    return s;
+}
+
+function setLanguage(lang) {
+    currentLang = lang;
+    localStorage.setItem('dns_lang', lang);
+    applyStaticTranslations();
+    const ll = document.getElementById('lang-label');
+    if (ll) ll.textContent = lang === 'ru' ? 'Язык: Русский' : 'Language: English';
+    // Re-render dynamic UI
+    if (state.currentChat) {
+        renderHeader();
+        renderMessages();
+    }
+    renderChatList();
+}
+
+function toggleLanguage() {
+    setLanguage(currentLang === 'ru' ? 'en' : 'ru');
+}
+
+// Applies translations to static HTML elements (placeholders, titles, etc.)
+function applyStaticTranslations() {
+    document.documentElement.lang = currentLang;
+    document.title = t('empty_title');
+
+    const set = (sel, prop, val) => { const el = document.querySelector(sel); if (el) el[prop] = val; };
+
+    set('#search-input', 'placeholder', t('search'));
+    set('#msg-input', 'placeholder', t('message_placeholder'));
+    set('#menu-btn', 'title', t('menu'));
+    set('#voice-rec-btn', 'title', t('voice_msg_btn'));
+    set('.attach-btn', 'title', t('attach_file'));
+    set('#send-btn', 'title', t('send'));
+
+    // Tabs
+    const tabAll = document.querySelector('.tab[data-tab="all"]');
+    const tabDm = document.querySelector('.tab[data-tab="dm"]');
+    const tabGr = document.querySelector('.tab[data-tab="group"]');
+    if (tabAll) tabAll.innerHTML = t('tab_all') + ' <span class="badge" id="badge-all" style="display:none">0</span>';
+    if (tabDm) tabDm.innerHTML = t('tab_personal') + ' <span class="badge" id="badge-dm" style="display:none">0</span>';
+    if (tabGr) tabGr.innerHTML = t('tab_groups') + ' <span class="badge" id="badge-group" style="display:none">0</span>';
+
+    // Empty state
+    const emptyH2 = document.querySelector('.no-chat h2');
+    const emptyP = document.querySelector('.no-chat p');
+    if (emptyH2) emptyH2.textContent = t('empty_title');
+    if (emptyP) emptyP.textContent = t('empty_desc');
+
+    // Drop overlay
+    const drop = document.querySelector('#drop-overlay span');
+    if (drop) drop.innerHTML = '\uD83D\uDCCE ' + t('drop_file');
+
+    // Drawer items — order in index.html: contacts, new_group, new_chat, privacy, language, logout, admin
+    const drawerItems = document.querySelectorAll('.drawer-item');
+    const drawerLabels = [
+        t('contacts'), t('new_group'), t('new_chat'), t('privacy'),
+        null, // language toggle — handled separately to preserve #lang-label span
+        t('logout'), t('admin_panel')
+    ];
+    drawerItems.forEach((el, i) => {
+        const label = drawerLabels[i];
+        if (label == null) return;
+        const icon = el.querySelector('.drawer-icon');
+        if (icon) el.innerHTML = icon.outerHTML + ' ' + label;
+    });
+    // Language toggle label
+    const ll2 = document.getElementById('lang-label');
+    if (ll2) ll2.textContent = currentLang === 'ru' ? 'Язык: Русский' : 'Language: English';
+    const drawerStatus = document.querySelector('.drawer-status');
+    if (drawerStatus) {
+        drawerStatus.innerHTML = `<span class="online-dot"></span> ${t('online')} <span class="change-photo-hint" onclick="showProfilePhotoUpload()">\uD83D\uDCF7 ${t('change_photo')}</span>`;
+    }
+    const drawerFooter = document.querySelector('.drawer-footer');
+    if (drawerFooter) drawerFooter.innerHTML = 'DNS Tunnel Messenger &middot; E2E';
+
+    // FAB menu items
+    const fabItems = document.querySelectorAll('.fab-menu-item');
+    const fabLabels = [t('new_group'), t('new_chat'), t('contacts')];
+    fabItems.forEach((el, i) => {
+        const icon = el.querySelector('.fab-icon');
+        if (icon && fabLabels[i]) {
+            el.innerHTML = icon.outerHTML + ' ' + fabLabels[i];
+        }
+    });
+
+    // Contacts header
+    const ch = document.querySelector('.contacts-header h2');
+    if (ch) ch.textContent = t('contacts');
+
+    // Context menu actions
+    const ctxButtons = document.querySelectorAll('.ctx-actions button');
+    const ctxLabels = [['↩', t('reply')], ['📋', t('copy')], ['🗑', t('delete')], ['ℹ', t('info')]];
+    ctxButtons.forEach((btn, i) => {
+        if (ctxLabels[i]) btn.innerHTML = `<span>${ctxLabels[i][0]}</span> ${ctxLabels[i][1]}`;
+    });
+
+    // Call overlay buttons titles
+    const callBtnTitles = {
+        'btn-mute': 'mic_off',
+        'btn-camera': 'cam_off',
+    };
+    for (const [id, key] of Object.entries(callBtnTitles)) {
+        const el = document.getElementById(id);
+        if (el) el.title = t(key);
+    }
+}
+
 // ── Color palette for avatars ───────────────────────────────────────
 const AVATAR_COLORS = [
     ['#8774e1', '#6c5bbf'], ['#4dcd5e', '#37a34a'], ['#e05d5d', '#b94545'],
@@ -39,14 +304,15 @@ const lastSeenCache = {};
 
 function formatLastSeen(data) {
     if (!data) return '';
-    if (data.online) return 'online';
-    if (!data.last_seen) return 'last seen recently';
+    if (data.hidden) return 'был(а) недавно';
+    if (data.online) return 'в сети';
+    if (!data.last_seen) return 'был(а) недавно';
     const diff = (Date.now() / 1000) - data.last_seen;
-    if (diff < 60) return 'last seen just now';
-    if (diff < 3600) return `last seen ${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `last seen ${Math.floor(diff / 3600)}h ago`;
+    if (diff < 60) return 'был(а) только что';
+    if (diff < 3600) return `был(а) ${Math.floor(diff / 60)} мин назад`;
+    if (diff < 86400) return `был(а) ${Math.floor(diff / 3600)} ч назад`;
     const d = new Date(data.last_seen * 1000);
-    return 'last seen ' + d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+    return 'был(а) ' + d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
 // ── State ───────────────────────────────────────────────────────────
@@ -261,10 +527,10 @@ function renderHeader() {
         </div>
         <div class="header-actions">
             ${!isGroup ? `
-                <button onclick="startCall(false)" title="Voice call">&#x1F4DE;</button>
-                <button onclick="startCall(true)" title="Video call">&#x1F4F9;</button>
+                <button onclick="startCall(false)" title="Голосовой вызов">&#x1F4DE;</button>
+                <button onclick="startCall(true)" title="Видеозвонок">&#x1F4F9;</button>
             ` : ''}
-            ${isGroup ? `<button class="invite-btn" onclick="showInviteModal()">+ Member</button>` : ''}
+            ${isGroup ? `<button class="invite-btn" onclick="showInviteModal()">+ Участник</button>` : ''}
         </div>
     `;
 
@@ -313,7 +579,7 @@ function renderMessages() {
         // Skip deleted messages or show placeholder
         if (msg.deleted) {
             div.className = `message ${isMine ? 'sent' : 'received'} deleted${isNew ? ' first' : ''}`;
-            div.innerHTML = `<div class="msg-text">Message deleted<span class="msg-footer">
+            div.innerHTML = `<div class="msg-text">Сообщение удалено<span class="msg-footer">
                 <span class="msg-time">${formatTime(msg.ts)}</span>
             </span></div>`;
             $messages.appendChild(div);
@@ -419,16 +685,16 @@ async function sendMessage() {
             body: JSON.stringify(body),
         }).then(r => r.json());
 
-        if (!res.ok) toast(res.error || 'Send error', 'error');
+        if (!res.ok) toast(res.error || t('send_error'), 'error');
     } catch (e) {
-        toast('Server unavailable', 'error');
+        toast(t('server_unavailable'), 'error');
     }
 }
 
 async function sendFile() {
     if (!state.currentChat) return;
     if (state.currentChat.type === 'group') {
-        toast('Files are only available in direct chats', 'info');
+        toast(t('call_only_dm'), 'info');
         return;
     }
     $fileInput.click();
@@ -439,7 +705,7 @@ $fileInput?.addEventListener('change', async () => {
     if (!file || !state.currentChat) return;
 
     if (file.size > 512 * 1024) {
-        toast('Max size: 512 KB (DNS transport)', 'error');
+        toast(t('file_max'), 'error');
         $fileInput.value = '';
         return;
     }
@@ -455,16 +721,16 @@ $fileInput?.addEventListener('change', async () => {
 
     try {
         const res = await fetch('/api/file/send', { method: 'POST', body: fd }).then(r => r.json());
-        if (res.ok) toast('File sent', 'success');
-        else toast(res.error || 'File send error', 'error');
+        if (res.ok) toast(t('file_sent'), 'success');
+        else toast(res.error || t('file_send_err'), 'error');
     } catch (e) {
-        toast('Server unavailable', 'error');
+        toast(t('server_unavailable'), 'error');
     }
     $fileInput.value = '';
 });
 
 async function downloadFile(fid, from, filename) {
-    toast('Downloading...', 'info');
+    toast(t('file_dl'), 'info');
     try {
         const res = await fetch('/api/file/download', {
             method: 'POST',
@@ -473,14 +739,13 @@ async function downloadFile(fid, from, filename) {
         }).then(r => r.json());
 
         if (res.ok && res.token) {
-            // Use GET endpoint — works on mobile browsers
             window.open(`/api/file/get/${res.token}`, '_blank');
-            toast('File downloaded', 'success');
+            toast(t('file_downloaded'), 'success');
         } else {
-            toast('Download failed', 'error');
+            toast(t('file_dl_err'), 'error');
         }
     } catch (e) {
-        toast('Download error', 'error');
+        toast(t('file_dl_err'), 'error');
     }
 }
 
@@ -491,13 +756,20 @@ async function downloadFile(fid, from, filename) {
 const ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.services.mozilla.com' },
+    // Free TURN servers from Open Relay (helps when direct P2P fails, e.g. strict NATs)
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
 ];
 
 let callState = {
     active: false,
-    peer: null,       // username of other party
-    pc: null,         // RTCPeerConnection
+    peer: null,
+    pc: null,
     localStream: null,
     remoteStream: null,
     isVideo: false,
@@ -508,6 +780,9 @@ let callState = {
     timerInterval: null,
     pendingOffer: null,
     pendingVideo: false,
+    iceQueue: [],        // queued ICE candidates received before setRemoteDescription
+    remoteDescSet: false,
+    ringtoneOsc: null,   // ringing tone oscillator
 };
 
 const $callOverlay = document.getElementById('call-overlay');
@@ -518,17 +793,18 @@ const $callTimer = document.getElementById('call-timer');
 const $callVideos = document.getElementById('call-videos');
 const $remoteVideo = document.getElementById('remote-video');
 const $localVideo = document.getElementById('local-video');
+const $remoteAudio = document.getElementById('remote-audio');
 const $callIncoming = document.getElementById('call-incoming');
 const $callActive = document.getElementById('call-active');
 const $callOutgoing = document.getElementById('call-outgoing');
 
 function startCall(video) {
     if (!state.currentChat || state.currentChat.type !== 'dm') {
-        toast('Calls are only available in direct chats', 'info');
+        toast('Звонки доступны только в личных чатах', 'info');
         return;
     }
     if (callState.active) {
-        toast('Already in a call', 'info');
+        toast('Вы уже в звонке', 'info');
         return;
     }
 
@@ -555,19 +831,23 @@ function showCallUI(peer, video, mode) {
     $callVideos.style.display = 'none';
 
     if (mode === 'incoming') {
-        $callStatus.textContent = video ? 'Incoming video call...' : 'Incoming voice call...';
+        $callStatus.textContent = video ? 'Входящий видеозвонок...' : 'Входящий вызов...';
         $callIncoming.style.display = 'flex';
         $callOverlay.classList.add('ringing');
+        startRingtone(true);   // play incoming ringtone
+        vibrate([400, 200, 400, 200, 400]);
     } else if (mode === 'outgoing') {
-        $callStatus.textContent = 'Calling...';
+        $callStatus.textContent = 'Вызов...';
         $callOutgoing.style.display = 'flex';
         $callOverlay.classList.add('ringing');
+        startRingtone(false);  // play outgoing ringback
     } else {
-        $callStatus.textContent = video ? 'Video call' : 'Voice call';
+        $callStatus.textContent = video ? 'Видеозвонок' : 'Голосовой вызов';
         $callActive.style.display = 'flex';
         $callOverlay.classList.remove('ringing');
+        stopRingtone();
         if (video) $callVideos.style.display = 'block';
-        startCallTimer();
+        if (!callState.startTime) startCallTimer();
     }
 
     $callOverlay.classList.add('show');
@@ -576,8 +856,10 @@ function showCallUI(peer, video, mode) {
 function hideCallUI() {
     $callOverlay.classList.remove('show', 'ringing');
     stopCallTimer();
+    stopRingtone();
     if ($remoteVideo) $remoteVideo.srcObject = null;
     if ($localVideo) $localVideo.srcObject = null;
+    if ($remoteAudio) $remoteAudio.srcObject = null;
 }
 
 function startCallTimer() {
@@ -606,14 +888,20 @@ async function initOutgoingCall(peer, video) {
             video: video ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false,
         });
         callState.localStream = stream;
-        if (video && $localVideo) $localVideo.srcObject = stream;
+        if (video && $localVideo) {
+            $localVideo.srcObject = stream;
+            $localVideo.play().catch(()=>{});
+        }
 
         const pc = createPeerConnection(peer);
         callState.pc = pc;
 
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
 
-        const offer = await pc.createOffer();
+        const offer = await pc.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: video,
+        });
         await pc.setLocalDescription(offer);
 
         socket.emit('call-offer', {
@@ -622,16 +910,17 @@ async function initOutgoingCall(peer, video) {
             video: video,
         });
     } catch (e) {
-        showMediaError('calls');
+        console.error('initOutgoingCall error:', e);
+        showMediaError('звонков');
         cleanupCall();
     }
 }
 
 function showMediaError(feature) {
     if (location.protocol === 'http:' && location.hostname !== 'localhost') {
-        toast(`Chrome requires HTTPS for ${feature}. Open https://${location.host} and accept the certificate`, 'error');
+        toast(`Для ${feature} Chrome требует HTTPS. Откройте https://${location.host} и примите сертификат`, 'error');
     } else {
-        toast('Allow microphone/camera access in browser settings', 'error');
+        toast('Разрешите доступ к микрофону/камере в настройках браузера', 'error');
     }
 }
 
@@ -644,25 +933,48 @@ function createPeerConnection(peer) {
         }
     };
 
+    // Remote media arrived — attach to BOTH audio and video elements so audio plays
+    // even during pure voice calls (where the <video> container is hidden).
     pc.ontrack = (e) => {
-        callState.remoteStream = e.streams[0];
-        if ($remoteVideo) $remoteVideo.srcObject = e.streams[0];
+        const stream = e.streams[0];
+        callState.remoteStream = stream;
+        // Audio always goes to the always-present <audio> element
+        if ($remoteAudio) {
+            $remoteAudio.srcObject = stream;
+            $remoteAudio.play().catch((err) => {
+                console.warn('Remote audio autoplay blocked:', err);
+                // Try unlocking on user interaction
+                const unlock = () => {
+                    $remoteAudio.play().catch(()=>{});
+                    document.removeEventListener('click', unlock);
+                };
+                document.addEventListener('click', unlock, { once: true });
+            });
+        }
+        // Also attach to the video element (muted internally; audio plays via the audio element)
+        if ($remoteVideo) {
+            $remoteVideo.srcObject = stream;
+            $remoteVideo.muted = true; // important: prevent double audio
+            $remoteVideo.play().catch(()=>{});
+        }
     };
 
     pc.oniceconnectionstatechange = () => {
         const s = pc.iceConnectionState;
+        console.log('ICE state:', s);
         if (s === 'connected' || s === 'completed') {
-            $callStatus.textContent = callState.isVideo ? 'Video call' : 'Voice call';
+            $callStatus.textContent = callState.isVideo ? 'Видеозвонок' : 'Голосовой вызов';
             $callOverlay.classList.remove('ringing');
+            stopRingtone();
             $callOutgoing.style.display = 'none';
             $callActive.style.display = 'flex';
             if (callState.isVideo) $callVideos.style.display = 'block';
             if (!callState.startTime) startCallTimer();
         } else if (s === 'failed') {
-            toast('Connection failed — WebRTC could not establish a direct connection. Try voice messages instead.', 'error');
+            toast('Не удалось установить соединение. Возможно, NAT/фаервол блокирует P2P', 'error');
             cleanupCall();
         } else if (s === 'disconnected') {
-            $callStatus.textContent = 'Reconnecting...';
+            $callStatus.textContent = 'Переподключение...';
         }
     };
 
@@ -675,6 +987,7 @@ async function acceptCall(video) {
     callState.active = true;
     callState.isVideo = video || callState.pendingVideo;
     callState.isIncoming = false;
+    stopRingtone();
 
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -682,7 +995,10 @@ async function acceptCall(video) {
             video: video ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false,
         });
         callState.localStream = stream;
-        if (video && $localVideo) $localVideo.srcObject = stream;
+        if (video && $localVideo) {
+            $localVideo.srcObject = stream;
+            $localVideo.play().catch(()=>{});
+        }
 
         const pc = createPeerConnection(callState.peer);
         callState.pc = pc;
@@ -690,6 +1006,15 @@ async function acceptCall(video) {
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
 
         await pc.setRemoteDescription(new RTCSessionDescription(callState.pendingOffer));
+        callState.remoteDescSet = true;
+
+        // Flush any queued ICE candidates now that remote description is set
+        for (const c of callState.iceQueue) {
+            try { await pc.addIceCandidate(new RTCIceCandidate(c)); }
+            catch (e) { console.error('Queued ICE add failed:', e); }
+        }
+        callState.iceQueue = [];
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -702,7 +1027,8 @@ async function acceptCall(video) {
         callState.pendingOffer = null;
 
     } catch (e) {
-        showMediaError('calls');
+        console.error('acceptCall error:', e);
+        showMediaError('звонков');
         cleanupCall();
     }
 }
@@ -725,8 +1051,9 @@ function cleanupCall() {
         callState.localStream.getTracks().forEach(t => t.stop());
     }
     if (callState.pc) {
-        callState.pc.close();
+        try { callState.pc.close(); } catch(e) {}
     }
+    stopRingtone();
     hideCallUI();
     callState = {
         active: false, peer: null, pc: null,
@@ -734,6 +1061,7 @@ function cleanupCall() {
         isVideo: false, isMuted: false, isCameraOff: false,
         isIncoming: false, startTime: null, timerInterval: null,
         pendingOffer: null, pendingVideo: false,
+        iceQueue: [], remoteDescSet: false, ringtoneOsc: null,
     };
 }
 
@@ -743,21 +1071,21 @@ function toggleMute() {
     callState.localStream.getAudioTracks().forEach(t => { t.enabled = !callState.isMuted; });
     const btn = document.getElementById('btn-mute');
     btn.classList.toggle('off', callState.isMuted);
-    btn.title = callState.isMuted ? 'Unmute' : 'Mute';
+    btn.title = callState.isMuted ? 'Включить микрофон' : 'Выключить микрофон';
 }
 
 function toggleCamera() {
     if (!callState.localStream) return;
     const videoTracks = callState.localStream.getVideoTracks();
     if (videoTracks.length === 0) {
-        toast('No camera in this call', 'info');
+        toast('В этом звонке нет камеры', 'info');
         return;
     }
     callState.isCameraOff = !callState.isCameraOff;
     videoTracks.forEach(t => { t.enabled = !callState.isCameraOff; });
     const btn = document.getElementById('btn-camera');
     btn.classList.toggle('off', callState.isCameraOff);
-    btn.title = callState.isCameraOff ? 'Camera on' : 'Camera off';
+    btn.title = callState.isCameraOff ? 'Включить камеру' : 'Выключить камеру';
 }
 
 // ── Call signaling listeners ───────────────────────────────────────
@@ -778,13 +1106,29 @@ socket.on('call-answer', async (data) => {
     if (!callState.pc) return;
     try {
         await callState.pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        callState.remoteDescSet = true;
+        // Flush queued ICE candidates
+        for (const c of callState.iceQueue) {
+            try { await callState.pc.addIceCandidate(new RTCIceCandidate(c)); }
+            catch (e) { console.error('Queued ICE add failed:', e); }
+        }
+        callState.iceQueue = [];
     } catch (e) {
         console.error('Failed to set remote description:', e);
     }
 });
 
 socket.on('ice-candidate', async (data) => {
-    if (!callState.pc) return;
+    if (!callState.pc) {
+        // Store for later — peer connection not yet created
+        callState.iceQueue.push(data.candidate);
+        return;
+    }
+    if (!callState.remoteDescSet) {
+        // Queue until setRemoteDescription completes
+        callState.iceQueue.push(data.candidate);
+        return;
+    }
     try {
         await callState.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
     } catch (e) {
@@ -793,20 +1137,165 @@ socket.on('ice-candidate', async (data) => {
 });
 
 socket.on('call-end', () => {
-    toast('Call ended', 'info');
+    toast('Звонок завершён', 'info');
     cleanupCall();
 });
 
 socket.on('call-reject', (data) => {
-    const reason = data.reason === 'busy' ? `${data.from} is busy` : `${data.from} declined the call`;
+    const reason = data.reason === 'busy' ? `${data.from} занят` : `${data.from} отклонил звонок`;
     toast(reason, 'info');
     cleanupCall();
 });
 
 socket.on('call-error', (data) => {
-    toast(data.error || 'Call error', 'error');
+    toast(data.error || 'Ошибка звонка', 'error');
     cleanupCall();
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// Notifications: sound (Web Audio) + vibration
+// ═══════════════════════════════════════════════════════════════════
+
+let audioCtx = null;
+function getAudioCtx() {
+    if (!audioCtx) {
+        try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+        catch (e) { return null; }
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(()=>{});
+    return audioCtx;
+}
+
+// Unlock audio on first user interaction (browser autoplay policy)
+document.addEventListener('click', () => { getAudioCtx(); }, { once: true });
+document.addEventListener('touchstart', () => { getAudioCtx(); }, { once: true });
+
+function playBeep(freq = 880, duration = 0.15, volume = 0.15) {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    try {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.value = 0;
+        gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + 0.01);
+        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + duration);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + duration + 0.02);
+    } catch (e) {}
+}
+
+function playMessageSound() {
+    playBeep(880, 0.08, 0.12);
+    setTimeout(() => playBeep(1175, 0.1, 0.12), 90);
+}
+
+function vibrate(pattern) {
+    if (navigator.vibrate) {
+        try { navigator.vibrate(pattern); } catch (e) {}
+    }
+}
+
+// Ringing tone loops for incoming/outgoing calls
+function startRingtone(incoming) {
+    stopRingtone();
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+
+    const playPhase = () => {
+        if (!callState.ringtoneOsc) return;
+        if (incoming) {
+            // Incoming: two alternating tones, louder
+            playBeep(1000, 0.4, 0.2);
+            setTimeout(() => playBeep(800, 0.4, 0.2), 420);
+        } else {
+            // Outgoing ringback: single long beep
+            playBeep(440, 0.6, 0.1);
+        }
+    };
+
+    callState.ringtoneOsc = setInterval(playPhase, incoming ? 1200 : 2500);
+    playPhase();
+}
+
+function stopRingtone() {
+    if (callState.ringtoneOsc) {
+        clearInterval(callState.ringtoneOsc);
+        callState.ringtoneOsc = null;
+    }
+}
+
+// Request Notification permission on first user click (avoids blocking modals)
+let notifPermRequested = false;
+document.addEventListener('click', () => {
+    if (!notifPermRequested && 'Notification' in window && Notification.permission === 'default') {
+        notifPermRequested = true;
+        try { Notification.requestPermission().catch(()=>{}); } catch(e) {}
+    }
+}, { once: false });
+
+function showDesktopNotification(title, body) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!document.hidden) return; // only notify when tab is hidden
+    try {
+        const n = new Notification(title, { body, icon: '/static/favicon.png' });
+        n.onclick = () => { window.focus(); n.close(); };
+        setTimeout(() => n.close(), 5000);
+    } catch (e) {}
+}
+
+// Privacy settings stored locally — last seen visibility
+function getPrivacyLastSeen() {
+    return localStorage.getItem('dns_privacy_last_seen') || 'everyone'; // 'everyone' | 'nobody'
+}
+
+function setPrivacyLastSeen(val) {
+    localStorage.setItem('dns_privacy_last_seen', val);
+    // Inform server so it hides our last_seen from others
+    fetch('/api/privacy/last-seen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visibility: val }),
+    }).catch(()=>{});
+}
+
+function showPrivacySettings() {
+    const cur = getPrivacyLastSeen();
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `
+        <div class="modal">
+            <h3>Конфиденциальность</h3>
+            <p style="color:var(--text-secondary);font-size:14px;margin-bottom:12px">
+                Кто может видеть время моего последнего захода:
+            </p>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+                <label style="display:flex;align-items:center;gap:10px;padding:10px;background:var(--bg-input);border-radius:8px;cursor:pointer">
+                    <input type="radio" name="ls-priv" value="everyone" ${cur==='everyone'?'checked':''}>
+                    <span>Все</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:10px;padding:10px;background:var(--bg-input);border-radius:8px;cursor:pointer">
+                    <input type="radio" name="ls-priv" value="nobody" ${cur==='nobody'?'checked':''}>
+                    <span>Никто</span>
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Закрыть</button>
+                <button class="btn btn-primary" id="priv-save">Сохранить</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#priv-save').onclick = () => {
+        const val = overlay.querySelector('input[name="ls-priv"]:checked').value;
+        setPrivacyLastSeen(val);
+        overlay.remove();
+        toast('Настройки сохранены', 'success');
+    };
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // Voice Messages (record audio, send as file via DNS tunnel)
@@ -956,12 +1445,12 @@ async function playVoice(btn) {
     const file = wrap.dataset.file;
 
     if (!fid) {
-        toast('Voice message not available for playback', 'info');
+        toast(t('voice_unavailable'), 'info');
         return;
     }
 
     btn.innerHTML = '&#x23F8;';
-    toast('Loading voice...', 'info');
+    toast(t('voice_loading'), 'info');
 
     try {
         const res = await fetch('/api/file/download', {
@@ -990,11 +1479,11 @@ async function playVoice(btn) {
 
             audio.play();
         } else {
-            toast('Cannot load voice message', 'error');
+            toast(t('voice_load_err'), 'error');
             btn.innerHTML = '&#x25B6;';
         }
     } catch (e) {
-        toast('Download error', 'error');
+        toast(t('file_dl_err'), 'error');
         btn.innerHTML = '&#x25B6;';
     }
 }
@@ -1002,7 +1491,7 @@ async function playVoice(btn) {
 async function sendVoiceMessage(blob, duration) {
     if (!state.currentChat) return;
     if (blob.size > 512 * 1024) {
-        toast('Voice message too long (max 512 KB via DNS)', 'error');
+        toast(t('voice_too_large'), 'error');
         return;
     }
 
@@ -1025,10 +1514,10 @@ async function sendVoiceMessage(blob, duration) {
 
     try {
         const res = await fetch('/api/file/send', { method: 'POST', body: fd }).then(r => r.json());
-        if (res.ok) toast('Voice message sent', 'success');
-        else toast(res.error || 'Send error', 'error');
+        if (res.ok) toast(t('voice_sent'), 'success');
+        else toast(res.error || t('send_error'), 'error');
     } catch (e) {
-        toast('Server unavailable', 'error');
+        toast(t('server_unavailable'), 'error');
     }
 }
 
@@ -1172,9 +1661,9 @@ function ctxCopy() {
     if (!ctxTargetMsg) { hideContextMenu(); return; }
     const text = ctxTargetMsg.text || '';
     if (text) {
-        navigator.clipboard?.writeText(text).then(() => toast('Copied', 'success')).catch(() => {});
+        navigator.clipboard?.writeText(text).then(() => toast(t('copied'), 'success')).catch(() => {});
     } else {
-        toast('No text to copy', 'info');
+        toast(t('no_text_to_copy'), 'info');
     }
     hideContextMenu();
 }
@@ -1195,14 +1684,14 @@ function ctxDelete() {
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     overlay.innerHTML = `
         <div class="modal">
-            <h3>Delete message?</h3>
+            <h3>${t('delete_msg_title')}</h3>
             <p style="color:var(--text-secondary);font-size:14px;margin-bottom:16px">
-                ${isMine ? 'This message was sent by you.' : `This message is from ${esc(ctxTargetMsg.from)}.`}
+                ${isMine ? t('delete_mine') : t('delete_theirs', esc(ctxTargetMsg.from))}
             </p>
             <div class="modal-actions" style="flex-direction:column;gap:8px">
-                <button class="btn btn-primary" style="width:100%;background:var(--red)" id="del-for-me">Delete for me</button>
-                ${isMine ? '<button class="btn btn-primary" style="width:100%;background:var(--red);opacity:0.8" id="del-for-all">Delete for everyone</button>' : ''}
-                <button class="btn btn-secondary" style="width:100%" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                <button class="btn btn-primary" style="width:100%;background:var(--red)" id="del-for-me">${t('delete_for_me')}</button>
+                ${isMine ? `<button class="btn btn-primary" style="width:100%;background:var(--red);opacity:0.8" id="del-for-all">${t('delete_for_all')}</button>` : ''}
+                <button class="btn btn-secondary" style="width:100%" onclick="this.closest('.modal-overlay').remove()">${t('cancel')}</button>
             </div>
         </div>
     `;
@@ -1217,7 +1706,7 @@ function ctxDelete() {
         renderMessages();
         renderChatList();
         overlay.remove();
-        toast('Message deleted', 'success');
+        toast(t('msg_deleted'), 'success');
     };
 
     const delAll = overlay.querySelector('#del-for-all');
@@ -1241,7 +1730,7 @@ function ctxDelete() {
                     });
                 } catch (e) {}
             }
-            toast('Message deleted for everyone', 'success');
+            toast(t('msg_deleted_all'), 'success');
         };
     }
 
@@ -1420,14 +1909,14 @@ function hideContacts() {
 async function loadContacts() {
     const $list = $('#contacts-list');
     if (!$list) return;
-    $list.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>';
+    $list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">${t('loading')}</div>`;
 
     try {
         const res = await fetch('/api/users').then(r => r.json());
         const users = res.users || [];
 
         if (users.length === 0) {
-            $list.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">No other users online yet</div>';
+            $list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">${t('no_users')}</div>`;
             return;
         }
 
@@ -1446,7 +1935,7 @@ async function loadContacts() {
                 ${avatarHtml(user, false, 'sm')}
                 <div>
                     <div class="contact-name">${esc(user)}</div>
-                    <div class="contact-status">online</div>
+                    <div class="contact-status">${t('online')}</div>
                 </div>
             `;
             $list.appendChild(div);
@@ -1455,7 +1944,7 @@ async function loadContacts() {
         // Check for new users
         checkNewUsers(users);
     } catch (e) {
-        $list.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Error loading contacts</div>';
+        $list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">${t('contacts_err')}</div>`;
     }
 }
 
@@ -1477,7 +1966,7 @@ function showNewUserNotification(user) {
     div.className = 'notification-banner';
     div.innerHTML = `
         ${avatarHtml(user, false, 'sm')}
-        <div class="notif-text"><strong>${esc(user)}</strong> joined the messenger</div>
+        <div class="notif-text"><strong>${esc(user)}</strong> ${t('joined_msg', '').trim()}</div>
         <button class="notif-close" onclick="this.parentElement.remove()">&#x2715;</button>
     `;
     div.querySelector('.notif-text').onclick = () => {
@@ -1518,8 +2007,8 @@ function showModal(title, fields, onSubmit) {
             <h3>${title}</h3>
             ${inputs}
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
-                <button class="btn btn-primary" id="modal-submit">OK</button>
+                <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">${t('cancel')}</button>
+                <button class="btn btn-primary" id="modal-submit">${t('ok')}</button>
             </div>
         </div>
     `;
@@ -1543,7 +2032,7 @@ function showModal(title, fields, onSubmit) {
 }
 
 function showNewDM() {
-    showModal('New Chat', [{ id: 'user', placeholder: 'Username' }], async ({ user }) => {
+    showModal(t('new_chat_title'), [{ id: 'user', placeholder: t('username_field') }], async ({ user }) => {
         if (!user) return;
         const res = await fetch('/api/resolve', {
             method: 'POST',
@@ -1556,15 +2045,15 @@ function showNewDM() {
             saveState();
             renderChatList();
             selectChat(user);
-            toast(`Chat with ${user} created`, 'success');
+            toast(t('chat_created', user), 'success');
         } else {
-            toast(res.error || `User "${user}" not found`, 'error');
+            toast(res.error || t('user_not_found', user), 'error');
         }
     });
 }
 
 function showNewGroup() {
-    showModal('New Group', [{ id: 'name', placeholder: 'Group name (latin, digits, _)' }], async ({ name }) => {
+    showModal(t('new_group_title'), [{ id: 'name', placeholder: t('group_name_field') }], async ({ name }) => {
         if (!name) return;
         const res = await fetch('/api/groups/create', {
             method: 'POST',
@@ -1577,16 +2066,16 @@ function showNewGroup() {
             saveState();
             renderChatList();
             selectChat(name);
-            toast(`Group "${name}" created`, 'success');
+            toast(t('group_created', name), 'success');
         } else {
-            toast(res.error || 'Failed to create group', 'error');
+            toast(res.error || t('group_create_err'), 'error');
         }
     });
 }
 
 function showInviteModal() {
     if (!state.currentChat || state.currentChat.type !== 'group') return;
-    showModal('Invite Member', [{ id: 'user', placeholder: 'Username' }], async ({ user }) => {
+    showModal(t('invite_member'), [{ id: 'user', placeholder: t('username_field') }], async ({ user }) => {
         if (!user) return;
         const res = await fetch('/api/groups/invite', {
             method: 'POST',
@@ -1596,11 +2085,11 @@ function showInviteModal() {
 
         if (res.ok) {
             const ts = Date.now();
-            addMessage(state.currentChat.id, { system: true, text: `${user} invited to group`, ts });
+            addMessage(state.currentChat.id, { system: true, text: t('invited_group', user), ts });
             renderMessages();
-            toast(`${user} invited`, 'success');
+            toast(t('invited', user), 'success');
         } else {
-            toast(res.error || 'Failed to invite', 'error');
+            toast(res.error || t('invite_err'), 'error');
         }
     });
 }
@@ -1625,13 +2114,21 @@ socket.on('message', (msg) => {
     const ts = Date.now();
     addMessage(chatId, { from: msg.from, text: msg.text, ts });
 
-    if (!state.currentChat || state.currentChat.id !== chatId) {
+    const isCurrent = state.currentChat && state.currentChat.id === chatId;
+    if (!isCurrent) {
         chat.unread = (chat.unread || 0) + 1;
         saveState();
     }
 
+    // Notify (sound + vibration + desktop) — but not for own messages echo
+    if (msg.from !== state.username) {
+        playMessageSound();
+        vibrate(100);
+        showDesktopNotification(msg.from, msg.text || '');
+    }
+
     renderChatList();
-    if (state.currentChat?.id === chatId) renderMessages();
+    if (isCurrent) renderMessages();
 });
 
 socket.on('file', (info) => {
@@ -1651,7 +2148,13 @@ socket.on('file', (info) => {
 
     renderChatList();
     if (state.currentChat?.id === info.from) renderMessages();
-    toast(isVoice ? `Voice message from ${info.from}` : `File from ${info.from}: ${info.name}`, 'info');
+
+    // Notify
+    playMessageSound();
+    vibrate(100);
+    const label = isVoice ? t('voice_from', info.from) : t('file_from', info.from, info.name);
+    showDesktopNotification(info.from, label);
+    toast(label, 'info');
 });
 
 // ── Connection status ───────────────────────────────────────────────
@@ -1662,7 +2165,7 @@ socket.on('status', (data) => {
     isConnected = data.connected;
     updateConnectionStatus();
     if (!wasConnected && isConnected) {
-        toast('Connection restored', 'success');
+        toast(t('connection_restored'), 'success');
     }
 });
 
@@ -1689,7 +2192,7 @@ function updateConnectionStatus() {
             const span = document.createElement('span');
             span.className = 'conn-warn';
             span.style.cssText = 'color:var(--red);margin-left:8px;font-size:12px';
-            span.textContent = '(reconnecting...)';
+            span.textContent = t('reconnecting');
             sub.appendChild(span);
         }
     } else if (sub) {
@@ -1792,7 +2295,7 @@ function showProfilePhotoUpload() {
         const file = input.files[0];
         if (!file) return;
         if (file.size > 100 * 1024) {
-            toast('Photo too large (max 100 KB)', 'error');
+            toast(t('file_too_large'), 'error');
             return;
         }
         const reader = new FileReader();
@@ -1809,12 +2312,12 @@ function showProfilePhotoUpload() {
                 if (res.ok) {
                     profilePhotos[state.username] = resized;
                     renderChatList();
-                    toast('Profile photo updated', 'success');
+                    toast(t('photo_updated'), 'success');
                 } else {
-                    toast(res.error || 'Upload failed', 'error');
+                    toast(res.error || t('send_error'), 'error');
                 }
             } catch (e) {
-                toast('Upload error', 'error');
+                toast(t('send_error'), 'error');
             }
         };
         reader.readAsDataURL(file);
@@ -1850,6 +2353,21 @@ setInterval(() => {
 async function init() {
     loadState();
     initTabs();
+
+    // Apply translations and sync language label
+    applyStaticTranslations();
+    const ll = document.getElementById('lang-label');
+    if (ll) ll.textContent = currentLang === 'ru' ? 'Язык: Русский' : 'Language: English';
+
+    // Sync privacy setting with server
+    try {
+        const lsVis = localStorage.getItem('dns_privacy_last_seen') || 'everyone';
+        fetch('/api/privacy/last-seen', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ visibility: lsVis }),
+        }).catch(()=>{});
+    } catch(e) {}
 
     // Fetch groups from server
     try {

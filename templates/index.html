@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DNS Messenger</title>
+    <title>DNS Мессенджер</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
 </head>
@@ -13,17 +13,17 @@
     <!-- ── Sidebar ─────────────────────────────────────────────── -->
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
-            <button class="menu-btn" id="menu-btn" onclick="openDrawer()" title="Menu">&#x2630;</button>
+            <button class="menu-btn" id="menu-btn" onclick="openDrawer()" title="Меню">&#x2630;</button>
             <div class="search-box">
-                <input type="text" id="search-input" placeholder="Search" autocomplete="off">
+                <input type="text" id="search-input" placeholder="Поиск" autocomplete="off">
             </div>
         </div>
 
         <!-- Tabs -->
         <div class="tabs" id="tabs">
-            <button class="tab active" data-tab="all">All <span class="badge" id="badge-all" style="display:none">0</span></button>
-            <button class="tab" data-tab="dm">Personal <span class="badge" id="badge-dm" style="display:none">0</span></button>
-            <button class="tab" data-tab="group">Groups <span class="badge" id="badge-group" style="display:none">0</span></button>
+            <button class="tab active" data-tab="all">Все <span class="badge" id="badge-all" style="display:none">0</span></button>
+            <button class="tab" data-tab="dm">Личные <span class="badge" id="badge-dm" style="display:none">0</span></button>
+            <button class="tab" data-tab="group">Группы <span class="badge" id="badge-group" style="display:none">0</span></button>
         </div>
 
         <!-- Notification banners -->
@@ -36,15 +36,15 @@
         <div class="fab-menu" id="fab-menu">
             <div class="fab-menu-item" onclick="showNewGroup(); closeFab();">
                 <span class="fab-icon" style="background:rgba(77,205,94,0.15);color:#4dcd5e">&#x1F465;</span>
-                New Group
+                Новая группа
             </div>
             <div class="fab-menu-item" onclick="showNewDM(); closeFab();">
                 <span class="fab-icon" style="background:rgba(135,116,225,0.15);color:#8774e1">&#x1F4AC;</span>
-                New Chat
+                Новый чат
             </div>
             <div class="fab-menu-item" onclick="showContacts(); closeFab();">
                 <span class="fab-icon" style="background:rgba(232,166,58,0.15);color:#e8a63a">&#x1F464;</span>
-                Contacts
+                Контакты
             </div>
         </div>
         <button class="fab" id="fab-btn" onclick="toggleFab()">&#x270E;</button>
@@ -53,10 +53,10 @@
         <div class="contacts-panel" id="contacts-panel">
             <div class="contacts-header">
                 <button class="back-btn" onclick="hideContacts()">&#x2190;</button>
-                <h2>Contacts</h2>
+                <h2>Контакты</h2>
             </div>
             <div class="contacts-list" id="contacts-list">
-                <div style="text-align:center;padding:40px;color:var(--text-muted)">Loading...</div>
+                <div style="text-align:center;padding:40px;color:var(--text-muted)">Загрузка...</div>
             </div>
         </div>
     </aside>
@@ -65,33 +65,39 @@
     <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
     <div class="drawer" id="drawer">
         <div class="drawer-header">
-            <div class="drawer-avatar" id="drawer-avatar" onclick="showProfilePhotoUpload()" title="Change photo" style="cursor:pointer"></div>
+            <div class="drawer-avatar" id="drawer-avatar" onclick="showProfilePhotoUpload()" title="Сменить фото" style="cursor:pointer"></div>
             <div class="drawer-username">{{ username }}</div>
             <div class="drawer-status">
-                <span class="online-dot"></span> online
-                <span class="change-photo-hint" onclick="showProfilePhotoUpload()">&#x1F4F7; Change photo</span>
+                <span class="online-dot"></span> в сети
+                <span class="change-photo-hint" onclick="showProfilePhotoUpload()">&#x1F4F7; Сменить фото</span>
             </div>
         </div>
         <div class="drawer-menu">
             <div class="drawer-item" onclick="showContacts(); closeDrawer();">
-                <span class="drawer-icon">&#x1F464;</span> Contacts
+                <span class="drawer-icon">&#x1F464;</span> Контакты
             </div>
             <div class="drawer-item" onclick="showNewGroup(); closeDrawer();">
-                <span class="drawer-icon">&#x1F465;</span> New Group
+                <span class="drawer-icon">&#x1F465;</span> Новая группа
             </div>
             <div class="drawer-item" onclick="showNewDM(); closeDrawer();">
-                <span class="drawer-icon">&#x1F4AC;</span> New Chat
+                <span class="drawer-icon">&#x1F4AC;</span> Новый чат
+            </div>
+            <div class="drawer-item" onclick="showPrivacySettings(); closeDrawer();">
+                <span class="drawer-icon">&#x1F512;</span> Конфиденциальность
+            </div>
+            <div class="drawer-item" onclick="toggleLanguage()">
+                <span class="drawer-icon">&#x1F310;</span> <span id="lang-label">Язык: Русский</span>
             </div>
             <div class="drawer-item" onclick="doLogout()">
-                <span class="drawer-icon">&#x1F6AA;</span> Log Out
+                <span class="drawer-icon">&#x1F6AA;</span> Выйти
             </div>
             <div class="drawer-divider"></div>
             <div class="drawer-item" onclick="window.location.href='/admin'; closeDrawer();">
-                <span class="drawer-icon">&#x2699;</span> Admin Panel
+                <span class="drawer-icon">&#x2699;</span> Админ-панель
             </div>
         </div>
         <div class="drawer-footer">
-            DNS Tunnel Messenger &middot; E2E Encrypted
+            DNS Tunnel Messenger &middot; E2E шифрование
         </div>
     </div>
 
@@ -104,33 +110,36 @@
         <!-- Empty state -->
         <div class="no-chat" id="no-chat">
             <div class="empty-icon">&#x1F310;</div>
-            <h2>DNS Tunnel Messenger</h2>
-            <p>Encrypted messages via DNS queries. Works even during internet shutdowns.</p>
+            <h2>DNS Tunnel Мессенджер</h2>
+            <p>Зашифрованные сообщения через DNS-запросы. Работает даже при отключениях интернета.</p>
             <div class="features">
                 <span class="feature-tag">&#x1F512; E2E</span>
-                <span class="feature-tag">&#x1F310; DNS Tunnel</span>
-                <span class="feature-tag">&#x1F4CE; Files</span>
+                <span class="feature-tag">&#x1F310; DNS-туннель</span>
+                <span class="feature-tag">&#x1F4CE; Файлы</span>
             </div>
         </div>
 
         <!-- Input area -->
         <div class="input-area" id="input-area" style="display:none">
             <div class="input-wrap">
-                <button class="voice-rec-btn" id="voice-rec-btn" onclick="toggleVoiceRecord()" title="Voice message">&#x1F3A4;</button>
-                <textarea id="msg-input" placeholder="Message" rows="1"></textarea>
-                <button class="attach-btn" onclick="sendFile()" title="Attach file">&#x1F4CE;</button>
+                <button class="voice-rec-btn" id="voice-rec-btn" onclick="toggleVoiceRecord()" title="Голосовое сообщение">&#x1F3A4;</button>
+                <textarea id="msg-input" placeholder="Сообщение" rows="1"></textarea>
+                <button class="attach-btn" onclick="sendFile()" title="Прикрепить файл">&#x1F4CE;</button>
             </div>
-            <button class="send-btn" id="send-btn" title="Send">&#x27A4;</button>
+            <button class="send-btn" id="send-btn" title="Отправить">&#x27A4;</button>
         </div>
 
         <!-- Drop overlay -->
         <div class="drop-overlay" id="drop-overlay">
-            <span>&#x1F4CE; Drop file to send</span>
+            <span>&#x1F4CE; Отпустите файл для отправки</span>
         </div>
     </main>
 </div>
 
 <input type="file" id="file-input">
+
+<!-- Remote audio element — always present so voice calls play audio even when video is hidden -->
+<audio id="remote-audio" autoplay playsinline></audio>
 
 <!-- ── Call overlay ────────────────────────────────────────────── -->
 <div class="call-overlay" id="call-overlay">
@@ -138,7 +147,7 @@
     <div class="call-content">
         <div class="call-avatar" id="call-avatar"></div>
         <div class="call-name" id="call-name"></div>
-        <div class="call-status" id="call-status">Calling...</div>
+        <div class="call-status" id="call-status">Вызов...</div>
         <div class="call-timer" id="call-timer" style="display:none">00:00</div>
 
         <!-- Video containers -->
@@ -149,33 +158,33 @@
 
         <!-- Incoming call buttons -->
         <div class="call-actions incoming" id="call-incoming" style="display:none">
-            <button class="call-btn reject" onclick="rejectCall()" title="Decline">
+            <button class="call-btn reject" onclick="rejectCall()" title="Отклонить">
                 <span>&#x1F4F5;</span>
             </button>
-            <button class="call-btn accept-audio" onclick="acceptCall(false)" title="Audio">
+            <button class="call-btn accept-audio" onclick="acceptCall(false)" title="Голосом">
                 <span>&#x1F4DE;</span>
             </button>
-            <button class="call-btn accept-video" onclick="acceptCall(true)" title="Video">
+            <button class="call-btn accept-video" onclick="acceptCall(true)" title="Видео">
                 <span>&#x1F4F9;</span>
             </button>
         </div>
 
         <!-- In-call buttons -->
         <div class="call-actions active" id="call-active" style="display:none">
-            <button class="call-btn toggle" id="btn-mute" onclick="toggleMute()" title="Mute">
+            <button class="call-btn toggle" id="btn-mute" onclick="toggleMute()" title="Микрофон">
                 <span>&#x1F3A4;</span>
             </button>
-            <button class="call-btn toggle" id="btn-camera" onclick="toggleCamera()" title="Camera">
+            <button class="call-btn toggle" id="btn-camera" onclick="toggleCamera()" title="Камера">
                 <span>&#x1F4F7;</span>
             </button>
-            <button class="call-btn reject" onclick="endCall()" title="End call">
+            <button class="call-btn reject" onclick="endCall()" title="Завершить">
                 <span>&#x1F4F5;</span>
             </button>
         </div>
 
         <!-- Outgoing call buttons -->
         <div class="call-actions outgoing" id="call-outgoing" style="display:none">
-            <button class="call-btn reject" onclick="endCall()" title="Cancel">
+            <button class="call-btn reject" onclick="endCall()" title="Отмена">
                 <span>&#x1F4F5;</span>
             </button>
         </div>
@@ -195,10 +204,10 @@
     </div>
     <div class="ctx-emoji-panel" id="ctx-emoji-panel"></div>
     <div class="ctx-actions">
-        <button onclick="ctxReply()"><span>↩</span> Reply</button>
-        <button onclick="ctxCopy()"><span>📋</span> Copy</button>
-        <button onclick="ctxDelete()"><span>🗑</span> Delete</button>
-        <button onclick="ctxInfo()"><span>ℹ</span> Info</button>
+        <button onclick="ctxReply()"><span>↩</span> Ответить</button>
+        <button onclick="ctxCopy()"><span>📋</span> Копировать</button>
+        <button onclick="ctxDelete()"><span>🗑</span> Удалить</button>
+        <button onclick="ctxInfo()"><span>ℹ</span> Инфо</button>
     </div>
 </div>
 

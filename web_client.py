@@ -337,6 +337,8 @@ file_cache: dict[str, tuple] = {}
 # Last seen timestamps: username → unix timestamp
 last_seen_lock = threading.Lock()
 last_seen: dict[str, float] = {}
+# Last-seen privacy: username → 'everyone' | 'nobody' (default 'everyone')
+last_seen_privacy: dict[str, str] = {}
 # Profile photos: username → base64 data URL (stored on disk)
 PROFILES_FILE = Path('.messenger_profiles.json')
 transport = None
@@ -601,6 +603,20 @@ def api_users():
 
 # ── Last seen ───────────────────────────────────────────────────────
 
+@app.route('/api/privacy/last-seen', methods=['POST'])
+def api_privacy_last_seen():
+    """Set the current user's last-seen visibility preference."""
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'})
+    vis = (request.json or {}).get('visibility', 'everyone')
+    if vis not in ('everyone', 'nobody'):
+        return jsonify({'ok': False, 'error': 'Invalid value'})
+    with last_seen_lock:
+        last_seen_privacy[m.username] = vis
+    return jsonify({'ok': True})
+
+
 @app.route('/api/last-seen/<username>')
 def api_last_seen(username):
     m = get_messenger()
@@ -610,6 +626,10 @@ def api_last_seen(username):
         is_online = username in users and users[username].running
     with last_seen_lock:
         ts = last_seen.get(username)
+        vis = last_seen_privacy.get(username, 'everyone')
+    # Hidden: still show "online" if actually online, but no timestamp
+    if vis == 'nobody' and username != m.username:
+        return jsonify({'online': is_online, 'last_seen': None, 'hidden': True})
     return jsonify({
         'online': is_online,
         'last_seen': ts,
@@ -628,10 +648,14 @@ def api_last_seen_batch():
         online_set = {u for u, um in users.items() if um.running}
     with last_seen_lock:
         for u in usernames:
-            result[u] = {
-                'online': u in online_set,
-                'last_seen': last_seen.get(u),
-            }
+            vis = last_seen_privacy.get(u, 'everyone')
+            if vis == 'nobody' and u != m.username:
+                result[u] = {'online': u in online_set, 'last_seen': None, 'hidden': True}
+            else:
+                result[u] = {
+                    'online': u in online_set,
+                    'last_seen': last_seen.get(u),
+                }
     return jsonify(result)
 
 

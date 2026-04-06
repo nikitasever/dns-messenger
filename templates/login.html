@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DNS Messenger</title>
+    <title>DNS Мессенджер</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
     <style>
         :root {
@@ -101,50 +101,50 @@
 <body>
     <div class="login-card">
         <div class="logo">&#x1F310;</div>
-        <h1>DNS Messenger</h1>
-        <p class="subtitle">Encrypted messenger through DNS tunnel</p>
+        <h1>DNS Мессенджер</h1>
+        <p class="subtitle">Зашифрованный мессенджер через DNS-туннель</p>
 
         <!-- Mode tabs -->
         <div class="mode-tabs">
-            <button class="mode-tab active" data-mode="anonymous" onclick="setMode('anonymous')">Anonymous</button>
-            <button class="mode-tab" data-mode="register" onclick="setMode('register')">Register</button>
-            <button class="mode-tab" data-mode="login" onclick="setMode('login')">Sign In</button>
+            <button class="mode-tab active" data-mode="anonymous" onclick="setMode('anonymous')">Анонимно</button>
+            <button class="mode-tab" data-mode="register" onclick="setMode('register')">Регистрация</button>
+            <button class="mode-tab" data-mode="login" onclick="setMode('login')">Вход</button>
         </div>
 
         <form id="login-form" onsubmit="return doLogin(event)">
             <div class="input-group">
-                <label>Username</label>
-                <input type="text" id="username" placeholder="Enter your nickname" autocomplete="off" autofocus required minlength="2" maxlength="20" pattern="[a-zA-Z0-9_]+">
-                <div class="input-hint" id="username-hint">Latin letters, digits, underscore. 2-20 characters.</div>
+                <label>Имя пользователя</label>
+                <input type="text" id="username" placeholder="Введите никнейм" autocomplete="off" autofocus required minlength="2" maxlength="20" pattern="[a-zA-Z0-9_]+">
+                <div class="input-hint" id="username-hint">Латинские буквы, цифры, подчёркивание. 2–20 символов.</div>
             </div>
 
             <div class="input-group pw-field" id="pw-field">
-                <label>Password</label>
-                <input type="password" id="password" placeholder="Enter password" autocomplete="off">
-                <div class="input-hint" id="pw-hint">Minimum 4 characters</div>
+                <label>Пароль</label>
+                <input type="password" id="password" placeholder="Введите пароль" autocomplete="off">
+                <div class="input-hint" id="pw-hint">Минимум 4 символа</div>
             </div>
 
             <details class="server-toggle">
-                <summary>Server settings</summary>
+                <summary>Настройки сервера</summary>
                 <div class="fields">
-                    <input type="text" id="server-ip" placeholder="Server IP" value="{{ server_ip }}">
-                    <input type="number" id="server-port" placeholder="Port" value="{{ server_port }}" style="max-width:100px">
+                    <input type="text" id="server-ip" placeholder="IP сервера" value="{{ server_ip }}">
+                    <input type="number" id="server-port" placeholder="Порт" value="{{ server_port }}" style="max-width:100px">
                 </div>
             </details>
 
-            <button type="submit" class="btn-login" id="btn-login">Enter Anonymously</button>
+            <button type="submit" class="btn-login" id="btn-login">Войти анонимно</button>
             <div class="error-msg" id="error-msg"></div>
         </form>
 
         <div class="info-box" id="info-box">
-            <strong>&#x1F512;</strong> <span class="anon-info">Anonymous mode: no password needed, but anyone can use this nickname. For a protected account, switch to <strong>Register</strong>.</span>
+            <strong>&#x1F512;</strong> <span class="anon-info">Анонимный режим: пароль не требуется, но никнейм может занять кто угодно. Для защищённого аккаунта выберите <strong>Регистрация</strong>.</span>
         </div>
 
         <div class="features-row">
             <span class="feature">&#x1F512; E2E</span>
-            <span class="feature">&#x1F310; DNS Tunnel</span>
-            <span class="feature">&#x1F465; Groups</span>
-            <span class="feature">&#x1F4CE; Files</span>
+            <span class="feature">&#x1F310; DNS-туннель</span>
+            <span class="feature">&#x1F465; Группы</span>
+            <span class="feature">&#x1F4CE; Файлы</span>
         </div>
     </div>
 
@@ -163,20 +163,20 @@
             if (m === 'anonymous') {
                 pwField.classList.remove('show');
                 pwInput.required = false;
-                btn.textContent = 'Enter Anonymously';
-                info.innerHTML = '<strong>&#x1F512;</strong> <span class="anon-info">Anonymous mode: no password needed, but anyone can use this nickname. For a protected account, switch to <strong>Register</strong>.</span>';
+                btn.textContent = 'Войти анонимно';
+                info.innerHTML = '<strong>&#x1F512;</strong> <span class="anon-info">Анонимный режим: пароль не требуется, но никнейм может занять кто угодно. Для защищённого аккаунта выберите <strong>Регистрация</strong>.</span>';
             } else if (m === 'register') {
                 pwField.classList.add('show');
                 pwInput.required = true;
-                pwHint.textContent = 'Minimum 4 characters. Stored securely on server.';
-                btn.textContent = 'Create Account';
-                info.innerHTML = '<strong>&#x1F512;</strong> Your encryption keys are generated locally. Password protects your account from unauthorized access.';
+                pwHint.textContent = 'Минимум 4 символа. Хранится защищённо на сервере.';
+                btn.textContent = 'Создать аккаунт';
+                info.innerHTML = '<strong>&#x1F512;</strong> Ключи шифрования создаются локально. Пароль защищает аккаунт от посторонних.';
             } else {
                 pwField.classList.add('show');
                 pwInput.required = true;
-                pwHint.textContent = 'Enter your registered password';
-                btn.textContent = 'Sign In';
-                info.innerHTML = '<strong>&#x1F512;</strong> Sign in to your registered account. E2E keys are stored on this device.';
+                pwHint.textContent = 'Введите ваш пароль';
+                btn.textContent = 'Войти';
+                info.innerHTML = '<strong>&#x1F512;</strong> Вход в зарегистрированный аккаунт. E2E-ключи хранятся на этом устройстве.';
             }
         }
 
@@ -190,7 +190,7 @@
             if (!username) return;
             btn.disabled = true;
             const origText = btn.textContent;
-            btn.textContent = 'Connecting...';
+            btn.textContent = 'Подключение...';
             errEl.style.display = 'none';
 
             try {
@@ -203,13 +203,13 @@
                 if (res.ok) {
                     window.location.href = '/';
                 } else {
-                    errEl.textContent = res.error || 'Connection error';
+                    errEl.textContent = res.error || 'Ошибка подключения';
                     errEl.style.display = 'block';
                     btn.disabled = false;
                     btn.textContent = origText;
                 }
             } catch (err) {
-                errEl.textContent = 'Server unavailable';
+                errEl.textContent = 'Сервер недоступен';
                 errEl.style.display = 'block';
                 btn.disabled = false;
                 btn.textContent = origText;
