@@ -940,6 +940,31 @@ def on_call_end(data):
         socketio.emit('call-end', {'from': m.username}, room=target)
 
 
+@socketio.on('typing')
+def on_typing(data):
+    """Relay typing indicator to peer or group room."""
+    m = get_messenger()
+    if not m:
+        return
+    target = data.get('to')
+    is_group = bool(data.get('group'))
+    typing = bool(data.get('typing'))
+    if not target:
+        return
+    payload = {'from': m.username, 'typing': typing, 'group': is_group, 'chat': target}
+    if is_group:
+        # Group rooms are not maintained server-side; broadcast to group members
+        try:
+            members = m.group_members(target) if hasattr(m, 'group_members') else []
+        except Exception:
+            members = []
+        for user in members:
+            if user and user != m.username:
+                socketio.emit('typing', payload, room=user)
+    else:
+        socketio.emit('typing', payload, room=target)
+
+
 @socketio.on('call-reject')
 def on_call_reject(data):
     """Notify caller that call was rejected."""

@@ -18,6 +18,7 @@ const I18N = {
         empty_title: 'DNS Tunnel Мессенджер',
         empty_desc: 'Зашифрованные сообщения через DNS-запросы. Работает даже при отключениях интернета.',
         message_placeholder: 'Сообщение', voice_msg_btn: 'Голосовое сообщение',
+        typing_one: 'печатает...', typing_many: 'печатают...',
         attach_file: 'Прикрепить файл', send: 'Отправить',
         drop_file: 'Отпустите файл для отправки',
         // Header
@@ -94,6 +95,7 @@ const I18N = {
         empty_title: 'DNS Tunnel Messenger',
         empty_desc: 'Encrypted messages via DNS queries. Works even during internet shutdowns.',
         message_placeholder: 'Message', voice_msg_btn: 'Voice message',
+        typing_one: 'typing...', typing_many: 'are typing...',
         attach_file: 'Attach file', send: 'Send',
         drop_file: 'Drop file to send',
         voice_call: 'Voice call', video_call: 'Video call', add_member: '+ Member',
@@ -522,7 +524,8 @@ function renderHeader() {
             <div class="chat-title">${esc(chat.name)}</div>
             <div class="chat-subtitle">
                 <span class="online-dot" style="background:${isOnline || isGroup ? 'var(--green)' : 'var(--text-muted)'}"></span>
-                ${isGroup ? 'E2E group \u00b7 DNS Tunnel' : esc(lsText)}
+                <span class="subtitle-text">${isGroup ? 'E2E group \u00b7 DNS Tunnel' : esc(lsText)}</span>
+                <span class="typing-text" style="display:none;color:var(--green);font-style:italic"></span>
             </div>
         </div>
         <div class="header-actions">
@@ -666,6 +669,11 @@ async function sendMessage() {
     const text = $msgInput.value.trim();
     $msgInput.value = '';
     $msgInput.style.height = 'auto';
+    if (typeof typingSentAt !== 'undefined' && typingSentAt) {
+        try { emitTyping(false); } catch(e) {}
+        typingSentAt = 0;
+        if (typeof typingStopTimer !== 'undefined') clearTimeout(typingStopTimer);
+    }
 
     const chat = state.chats[state.currentChat.id];
     const ts = Date.now();
@@ -1238,7 +1246,9 @@ document.addEventListener('click', () => {
 
 function showDesktopNotification(title, body) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    if (!document.hidden) return; // only notify when tab is hidden
+    // Notify whenever the window isn't focused (covers minimized, hidden tab, other window)
+    const focused = document.hasFocus && document.hasFocus();
+    if (focused && !document.hidden) return;
     try {
         const n = new Notification(title, { body, icon: '/static/favicon.png' });
         n.onclick = () => { window.focus(); n.close(); };
@@ -2211,10 +2221,87 @@ $msgInput?.addEventListener('keydown', (e) => {
 
 $sendBtn?.addEventListener('click', sendMessage);
 
+// ── Typing indicator ────────────────────────────────────────────────
+let typingSentAt = 0;
+let typingStopTimer = null;
+function emitTyping(isTyping) {
+    if (!state.currentChat) return;
+    socket.emit('typing', {
+        to: state.currentChat.id,
+        group: state.currentChat.type === 'group',
+        typing: !!isTyping,
+    });
+}
+
 $msgInput?.addEventListener('input', () => {
     $msgInput.style.height = 'auto';
     $msgInput.style.height = Math.min($msgInput.scrollHeight, 120) + 'px';
+    // Throttle typing event to once every 3s while user is typing
+    const now = Date.now();
+    if ($msgInput.value.trim()) {
+        if (now - typingSentAt > 3000) {
+            emitTyping(true);
+            typingSentAt = now;
+        }
+        clearTimeout(typingStopTimer);
+        typingStopTimer = setTimeout(() => {
+            emitTyping(false);
+            typingSentAt = 0;
+        }, 3500);
+    } else if (typingSentAt) {
+        clearTimeout(typingStopTimer);
+        emitTyping(false);
+        typingSentAt = 0;
+    }
 });
+
+// Stop typing once message is sent
+const _origSendMessage = typeof sendMessage === 'function' ? sendMessage : null;
+// Listen for typing events from peers
+const typingState = {}; // chatId -> { users: Set, timer }
+socket.on('typing', (data) => {
+    const chatId = data.group ? data.chat : data.from;
+    if (!chatId || data.from === state.username) return;
+    if (!typingState[chatId]) typingState[chatId] = { users: new Set(), timers: {} };
+    const st = typingState[chatId];
+    if (data.typing) {
+        st.users.add(data.from);
+        clearTimeout(st.timers[data.from]);
+        st.timers[data.from] = setTimeout(() => {
+            st.users.delete(data.from);
+            updateTypingUI(chatId);
+        }, 5000);
+    } else {
+        st.users.delete(data.from);
+        clearTimeout(st.timers[data.from]);
+    }
+    updateTypingUI(chatId);
+});
+
+function updateTypingUI(chatId) {
+    if (!state.currentChat || state.currentChat.id !== chatId) return;
+    const st = typingState[chatId];
+    const subtitle = $chatHeader.querySelector('.subtitle-text');
+    const typingEl = $chatHeader.querySelector('.typing-text');
+    if (!typingEl || !subtitle) return;
+    const users = st ? Array.from(st.users) : [];
+    if (users.length === 0) {
+        typingEl.style.display = 'none';
+        subtitle.style.display = '';
+        return;
+    }
+    let txt;
+    if (state.currentChat.type === 'group') {
+        txt = users.length === 1
+            ? `${users[0]} ${t('typing_one') || 'печатает...'}`
+            : `${users.join(', ')} ${t('typing_many') || 'печатают...'}`;
+    } else {
+        txt = t('typing_one') || 'печатает...';
+    }
+    typingEl.textContent = txt;
+    typingEl.style.display = '';
+    subtitle.style.display = 'none';
+}
 
 $searchInput?.addEventListener('input', () => renderChatList());
 
