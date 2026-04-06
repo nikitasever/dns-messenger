@@ -1797,3 +1797,191 @@ body {
 }
 
 .change-photo-hint:hover { opacity: 1; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Massive animation pack — micro-interactions everywhere
+   ═══════════════════════════════════════════════════════════════════ */
+
+@keyframes slideInUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInLeft {
+    from { opacity: 0; transform: translateX(-16px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideInRight {
+    from { opacity: 0; transform: translateX(16px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes scaleIn {
+    from { opacity: 0; transform: scale(0.85); }
+    to   { opacity: 1; transform: scale(1); }
+}
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.08); }
+}
+@keyframes pulseRing {
+    0%   { box-shadow: 0 0 0 0 rgba(0, 168, 132, 0.55); }
+    70%  { box-shadow: 0 0 0 12px rgba(0, 168, 132, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(0, 168, 132, 0); }
+}
+@keyframes shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+@keyframes typingDot {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30%           { transform: translateY(-4px); opacity: 1; }
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+@keyframes shake {
+    10%, 90% { transform: translateX(-1px); }
+    20%, 80% { transform: translateX(2px); }
+    30%, 50%, 70% { transform: translateX(-4px); }
+    40%, 60% { transform: translateX(4px); }
+}
+@keyframes bounceIn {
+    0%   { opacity: 0; transform: scale(0.3); }
+    50%  { opacity: 1; transform: scale(1.05); }
+    70%  { transform: scale(0.95); }
+    100% { transform: scale(1); }
+}
+@keyframes glow {
+    0%, 100% { box-shadow: 0 0 6px rgba(0, 168, 132, 0.4); }
+    50%      { box-shadow: 0 0 16px rgba(0, 168, 132, 0.7); }
+}
+
+/* Chat list items — staggered fade-in */
+.chat-item {
+    animation: slideInLeft 0.28s ease both;
+    transition: background 0.18s ease, transform 0.18s ease;
+}
+.chat-item:hover { transform: translateX(2px); }
+.chat-item:nth-child(1)  { animation-delay: 0.02s; }
+.chat-item:nth-child(2)  { animation-delay: 0.05s; }
+.chat-item:nth-child(3)  { animation-delay: 0.08s; }
+.chat-item:nth-child(4)  { animation-delay: 0.11s; }
+.chat-item:nth-child(5)  { animation-delay: 0.14s; }
+.chat-item:nth-child(6)  { animation-delay: 0.17s; }
+.chat-item:nth-child(7)  { animation-delay: 0.20s; }
+.chat-item:nth-child(8)  { animation-delay: 0.23s; }
+.chat-item:nth-child(n+9){ animation-delay: 0.26s; }
+
+/* Tabs underline transition */
+.tab { transition: color 0.2s ease, transform 0.15s ease; }
+.tab:hover { transform: translateY(-1px); }
+.tab.active { animation: scaleIn 0.25s ease; }
+
+/* Sidebar / drawer slide-in */
+.drawer { transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+.drawer-item {
+    transition: background 0.18s ease, padding-left 0.18s ease, transform 0.18s ease;
+}
+.drawer-item:hover { padding-left: 22px; transform: translateX(2px); }
+.drawer-icon { transition: transform 0.25s ease; display: inline-block; }
+.drawer-item:hover .drawer-icon { transform: scale(1.18) rotate(-6deg); }
+
+/* Buttons — universal click feedback */
+button, .btn, .send-btn, .attach-btn, .invite-btn, .fab-btn {
+    transition: transform 0.12s ease, background 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+button:hover, .btn:hover { transform: translateY(-1px); }
+button:active, .btn:active { transform: scale(0.94); }
+
+/* Send button — pulse glow when text present */
+#send-btn:not(:disabled) { animation: glow 2.4s ease-in-out infinite; }
+
+/* FAB pulse */
+.fab-btn { animation: pulseRing 2.5s ease-out infinite; }
+.fab-btn:hover { animation: none; transform: scale(1.08) rotate(8deg); }
+
+/* Avatars — gentle hover */
+.avatar, .avatar-sm, .avatar-md, .avatar-lg {
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+.avatar:hover, .avatar-sm:hover, .avatar-md:hover, .avatar-lg:hover {
+    transform: scale(1.06);
+}
+
+/* Header slide-in on chat open */
+.chat-header { animation: slideInUp 0.3s ease; }
+
+/* Messages — already have msgIn, add subtle hover lift */
+.message {
+    transition: transform 0.15s ease;
+}
+.message:hover { transform: translateY(-1px); }
+
+/* Reactions pop */
+.reaction { animation: bounceIn 0.35s ease both; transition: transform 0.15s ease; }
+.reaction:hover { transform: scale(1.18); }
+
+/* Modals — already have modalIn, add backdrop fade */
+.modal-backdrop, .modal-overlay { animation: fadeIn 0.2s ease; }
+.modal { animation: bounceIn 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+
+/* Toasts slide */
+.toast { animation: slideInRight 0.3s ease both; }
+.toast.error { animation: shake 0.45s ease, slideInRight 0.3s ease both; }
+
+/* Online dot — soft pulse */
+.online-dot {
+    animation: pulse 2.2s ease-in-out infinite;
+}
+
+/* Typing text */
+.typing-text { animation: fadeIn 0.25s ease; }
+
+/* Call overlay — scale in */
+#call-overlay, .call-overlay { animation: scaleIn 0.35s ease; }
+.call-btn { transition: transform 0.15s ease, background 0.2s ease; }
+.call-btn:hover { transform: scale(1.1); }
+.call-btn:active { transform: scale(0.92); }
+
+/* Spinner utility */
+.spinner {
+    display: inline-block;
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.25);
+    border-top-color: var(--accent, #00a884);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* Context menu */
+.context-menu, .ctx-menu { animation: scaleIn 0.18s ease; transform-origin: top left; }
+.ctx-actions button { transition: background 0.15s ease, transform 0.12s ease; }
+.ctx-actions button:hover { transform: translateY(-1px); }
+
+/* Badge bounce when count changes */
+.badge { transition: transform 0.2s ease; }
+.badge:not([style*="display:none"]) { animation: bounceIn 0.35s ease; }
+
+/* Search input focus glow */
+#search-input, #msg-input {
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+#search-input:focus, #msg-input:focus {
+    box-shadow: 0 0 0 2px rgba(0, 168, 132, 0.35);
+}
+
+/* Login page inputs */
+input[type="text"], input[type="password"] {
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+input[type="text"]:focus, input[type="password"]:focus {
+    box-shadow: 0 0 0 2px rgba(0, 168, 132, 0.35);
+}
+
+/* Reduce motion respect */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+    }
+}
