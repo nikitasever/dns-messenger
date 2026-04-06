@@ -1985,3 +1985,26 @@ input[type="text"]:focus, input[type="password"]:focus {
         transition-duration: 0.001ms !important;
     }
 }
+
+/* ─── Message swipe / select states ───────────────────────────────── */
+.message {
+    will-change: transform;
+    user-select: none;
+}
+.message.selected {
+    background: rgba(0, 168, 132, 0.18) !important;
+    box-shadow: 0 0 0 2px rgba(0, 168, 132, 0.55);
+    border-radius: 8px;
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+.message.swipe-flash {
+    background: rgba(0, 168, 132, 0.22) !important;
+    transition: background 0.15s ease;
+}
+@keyframes replyFlash {
+    0%   { background: rgba(0, 168, 132, 0.45); }
+    100% { background: transparent; }
+}
+.message.reply-flash {
+    animation: replyFlash 0.7s ease;
+}

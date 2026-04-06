@@ -648,12 +648,73 @@ function renderMessages() {
 
         // Context menu on right-click and long-press
         div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg); });
+
+        // Swipe-to-reply (Telegram-like) + long-press context menu
         let longPressTimer;
+        let swipeStartX = 0, swipeStartY = 0, swipeDX = 0, swiping = false, swipeFired = false;
+        const SWIPE_THRESHOLD = 60;
+        const swipeDir = isMine ? -1 : 1; // own messages swipe left, others right
         div.addEventListener('touchstart', (e) => {
-            longPressTimer = setTimeout(() => { showContextMenu(e.touches[0], msg); }, 500);
+            const t0 = e.touches[0];
+            swipeStartX = t0.clientX;
+            swipeStartY = t0.clientY;
+            swipeDX = 0; swiping = true; swipeFired = false;
+            longPressTimer = setTimeout(() => { showContextMenu(t0, msg); swiping = false; }, 500);
         }, { passive: true });
-        div.addEventListener('touchend', () => clearTimeout(longPressTimer));
-        div.addEventListener('touchmove', () => clearTimeout(longPressTimer));
+        div.addEventListener('touchmove', (e) => {
+            if (!swiping) return;
+            const t0 = e.touches[0];
+            const dx = t0.clientX - swipeStartX;
+            const dy = t0.clientY - swipeStartY;
+            if (Math.abs(dy) > 14) { swiping = false; clearTimeout(longPressTimer); div.style.transform = ''; return; }
+            if (Math.abs(dx) > 6) clearTimeout(longPressTimer);
+            // Only allow swipe in the right direction
+            if (Math.sign(dx) !== swipeDir && dx !== 0) return;
+            swipeDX = dx;
+            const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
+            div.style.transform = `translateX(${damped}px)`;
+            if (!swipeFired && Math.abs(dx) > SWIPE_THRESHOLD) {
+                swipeFired = true;
+                navigator.vibrate?.(20);
+                div.classList.add('swipe-flash');
+            }
+        }, { passive: true });
+        div.addEventListener('touchend', () => {
+            clearTimeout(longPressTimer);
+            div.style.transition = 'transform 0.25s ease';
+            div.style.transform = '';
+            setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
+            if (swipeFired) startReply(msg);
+            swiping = false;
+        });
+
+        // Mouse drag swipe (desktop)
+        let mDown = false, mStartX = 0, mFired = false;
+        div.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            mDown = true; mStartX = e.clientX; mFired = false;
+        });
+        div.addEventListener('mousemove', (e) => {
+            if (!mDown) return;
+            const dx = e.clientX - mStartX;
+            if (Math.sign(dx) !== swipeDir && dx !== 0) return;
+            const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
+            div.style.transform = `translateX(${damped}px)`;
+            if (!mFired && Math.abs(dx) > SWIPE_THRESHOLD) {
+                mFired = true;
+                div.classList.add('swipe-flash');
+            }
+        });
+        const mUp = () => {
+            if (!mDown) return;
+            mDown = false;
+            div.style.transition = 'transform 0.25s ease';
+            div.style.transform = '';
+            setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
+            if (mFired) startReply(msg);
+        };
+        div.addEventListener('mouseup', mUp);
+        div.addEventListener('mouseleave', mUp);
 
         $messages.appendChild(div);
     }
@@ -1542,6 +1603,13 @@ function showContextMenu(e, msg) {
     ctxTargetMsg = msg;
     if (!$ctxMenu) return;
 
+    // Highlight selected message
+    document.querySelectorAll('.message.selected').forEach(el => el.classList.remove('selected'));
+    if (msg && msg.id) {
+        const el = document.querySelector(`.message[data-msg-id="${msg.id}"]`);
+        if (el) el.classList.add('selected');
+    }
+
     $ctxMenu.classList.add('show');
 
     // Position
@@ -1558,7 +1626,26 @@ function showContextMenu(e, msg) {
 
 function hideContextMenu() {
     $ctxMenu?.classList.remove('show');
+    document.querySelectorAll('.message.selected').forEach(el => el.classList.remove('selected'));
     ctxTargetMsg = null;
+}
+
+// Swipe-to-reply: insert quote into the input
+function startReply(msg) {
+    if (!msg) return;
+    const text = msg.text || msg.file || (msg.voice ? '🎤' : '');
+    const snippet = (text || '').toString().slice(0, 60);
+    const quote = `> ${msg.from}: ${snippet}\n`;
+    if ($msgInput) {
+        if (!$msgInput.value.startsWith('> ')) $msgInput.value = quote + $msgInput.value;
+        $msgInput.focus();
+    }
+    // Brief highlight on the message
+    const el = document.querySelector(`.message[data-msg-id="${msg.id || ''}"]`);
+    if (el) {
+        el.classList.add('reply-flash');
+        setTimeout(() => el.classList.remove('reply-flash'), 700);
+    }
 }
 
 // Close on click outside
