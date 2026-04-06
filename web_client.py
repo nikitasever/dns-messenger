@@ -940,6 +940,17 @@ def on_call_end(data):
         socketio.emit('call-end', {'from': m.username}, room=target)
 
 
+@socketio.on('read')
+def on_read(data):
+    """Relay read receipt to the message author."""
+    m = get_messenger()
+    if not m:
+        return
+    target = data.get('to')
+    if target:
+        socketio.emit('read', {'from': m.username}, room=target)
+
+
 @socketio.on('typing')
 def on_typing(data):
     """Relay typing indicator to peer or group room."""

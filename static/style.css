@@ -2008,3 +2008,42 @@ input[type="text"]:focus, input[type="password"]:focus {
 .message.reply-flash {
     animation: replyFlash 0.7s ease;
 }
+
+/* ─── Reply quote (Telegram-style) ────────────────────────────────── */
+.reply-quote {
+    border-left: 3px solid var(--accent, #00a884);
+    background: rgba(0, 168, 132, 0.10);
+    padding: 6px 10px;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    max-width: 100%;
+    overflow: hidden;
+}
+.message.sent .reply-quote {
+    background: rgba(255, 255, 255, 0.12);
+    border-left-color: #fff;
+}
+.reply-quote .reply-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent, #00a884);
+    margin-bottom: 2px;
+}
+.message.sent .reply-quote .reply-name { color: #fff; }
+.reply-quote .reply-text {
+    font-size: 13px;
+    color: var(--text-muted, #8696a7);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.message.sent .reply-quote .reply-text { color: rgba(255, 255, 255, 0.85); }
+
+/* ─── Single / double check marks ─────────────────────────────────── */
+.msg-status {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 12px;
+    margin-left: 4px;
+    letter-spacing: -2px;
+}
+.msg-status.read { color: #4fc3f7; }

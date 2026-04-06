@@ -398,6 +398,10 @@ function selectChat(id) {
     if (!chat) return;
     state.currentChat = { type: chat.type, id };
     chat.unread = 0;
+    // Notify peer that their messages have been read (DM only)
+    if (chat.type === 'dm') {
+        try { socket.emit('read', { to: id }); } catch(e) {}
+    }
     saveState();
     renderChatList();
     renderMessages();
@@ -595,6 +599,22 @@ function renderMessages() {
 
         const reactionsHtml = renderReactions(msg);
 
+        // Detect a leading reply quote of the form "> name: text\n..." and split it out
+        let replyHtml = '';
+        let bodyText = msg.text || '';
+        if (bodyText.startsWith('> ')) {
+            const nl = bodyText.indexOf('\n');
+            if (nl > 0) {
+                const quoteLine = bodyText.slice(2, nl);
+                bodyText = bodyText.slice(nl + 1);
+                const colon = quoteLine.indexOf(':');
+                let qName = '', qText = quoteLine;
+                if (colon > 0) { qName = quoteLine.slice(0, colon); qText = quoteLine.slice(colon + 1).trim(); }
+                replyHtml = `<div class="reply-quote"><div class="reply-name">${esc(qName)}</div><div class="reply-text">${esc(qText)}</div></div>`;
+            }
+        }
+        const checkHtml = isMine ? `<span class="msg-status${msg.read ? ' read' : ''}">${msg.read ? '\u2713\u2713' : '\u2713'}</span>` : '';
+
         if (msg.voice) {
             // Voice message
             div.className = `message ${isMine ? 'sent' : 'received'}${isNew ? ' first' : ''}`;
@@ -615,7 +635,7 @@ function renderMessages() {
                 </div>
                 <div class="msg-footer">
                     <span class="msg-time">${formatTime(msg.ts)}</span>
-                    ${isMine ? '<span class="msg-status">&#x2713;&#x2713;</span>' : ''}
+                    ${checkHtml}
                 </div>
                 ${reactionsHtml}
             `;
@@ -638,9 +658,10 @@ function renderMessages() {
             div.className = `message ${isMine ? 'sent' : 'received'}${isNew ? ' first' : ''}`;
             div.innerHTML = `
                 ${!isMine && isGroup && isNew ? `<div class="sender" style="color:${avatarColor(msg.from)[0]}">${esc(msg.from)}</div>` : ''}
-                <div class="msg-text">${esc(msg.text)}<span class="msg-footer">
+                ${replyHtml}
+                <div class="msg-text">${esc(bodyText)}<span class="msg-footer">
                     <span class="msg-time">${formatTime(msg.ts)}</span>
-                    ${isMine ? '<span class="msg-status">&#x2713;&#x2713;</span>' : ''}
+                    ${checkHtml}
                 </span></div>
                 ${reactionsHtml}
             `;
@@ -2346,6 +2367,22 @@ $msgInput?.addEventListener('input', () => {
 const _origSendMessage = typeof sendMessage === 'function' ? sendMessage : null;
 // Listen for typing events from peers
 const typingState = {}; // chatId -> { users: Set, timer }
+socket.on('read', (data) => {
+    // Peer (data.from) read all messages we sent them. Mark as read.
+    const peer = data?.from;
+    if (!peer) return;
+    const chat = state.chats[peer];
+    if (!chat) return;
+    let changed = false;
+    for (const m of chat.messages) {
+        if (m.from === state.username && !m.read) { m.read = true; changed = true; }
+    }
+    if (changed) {
+        saveState();
+        if (state.currentChat && state.currentChat.id === peer) renderMessages();
+    }
+});
+
 socket.on('typing', (data) => {
     const chatId = data.group ? data.chat : data.from;
     if (!chatId || data.from === state.username) return;
