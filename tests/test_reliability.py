@@ -106,6 +106,17 @@ def main():
         bigs = [m for m in got if m['text'] == big]
         check('multi-chunk message arrives intact exactly once', len(bigs) == 1)
 
+        # file transfer through loss: header + every chunk drops its first
+        # response, exercising the _h_fchunk idempotency guard too
+        blob = os.urandom(2500)                      # multi-chunk binary file
+        fr = alice.send_file('bob', 'blob.bin', blob)
+        check('file send succeeds through loss', fr['ok'])
+        inbox = bob.poll_files()
+        blobs = [f for f in inbox if f['name'] == 'blob.bin']
+        check('file appears once in the inbox (no dup from retries)', len(blobs) == 1)
+        got_bytes = bob.download_file(blobs[0]['fid'], blobs[0]['from'])
+        check('downloaded file matches the original bytes', got_bytes == blob)
+
         # direct idempotency probe: replay a completed single-chunk send verbatim
         mid = protocol.gen_msg_id()
         payload = protocol.b32encode(b'0' * 16)
