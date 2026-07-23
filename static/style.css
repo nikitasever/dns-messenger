@@ -2554,6 +2554,18 @@ html[data-list-wallpaper="emerald"] #chat-list {
 }
 .message.sent .msg-edited { color: rgba(255,255,255,0.75); }
 
+/* Sender-authenticity warning (forged signature / changed key) */
+.message.msg-unverified { outline: 1px solid var(--red, #e05d5d); }
+.msg-authwarn {
+    display: block;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--red, #e05d5d);
+    margin-bottom: 4px;
+    line-height: 1.25;
+}
+.message.sent .msg-authwarn { color: #ffe0e0; }
+
 /* Clickable reply quote */
 .reply-quote { cursor: pointer; transition: background 0.15s ease; }
 .reply-quote:hover { filter: brightness(1.15); }

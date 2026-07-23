@@ -30,6 +30,8 @@ const I18N = {
         push_test_failed: 'Не удалось отправить',
         push_no_sw: 'Service worker не зарегистрирован (нужен HTTPS с доверенным сертификатом или localhost)',
         session_expired: 'Сессия истекла — нужно войти заново',
+        auth_forged: 'Подпись не совпадает — отправитель может быть поддельным',
+        auth_keychg: 'Ключ собеседника изменился — возможна подмена',
         edited: 'изменено', editing: 'Редактирование',
         forward_to: 'Переслать в…', forwarded_from: 'Переслано от', forwarded_to: 'Переслано в',
         no_other_chats: 'Нет других чатов',
@@ -126,6 +128,8 @@ const I18N = {
         push_test_failed: 'Could not send',
         push_no_sw: 'Service worker is not registered (needs HTTPS with a trusted certificate, or localhost)',
         session_expired: 'Session expired — please sign in again',
+        auth_forged: 'Signature mismatch — sender may be spoofed',
+        auth_keychg: 'Peer key changed — possible impersonation',
         edited: 'edited', editing: 'Editing',
         forward_to: 'Forward to…', forwarded_from: 'Forwarded from', forwarded_to: 'Forwarded to',
         no_other_chats: 'No other chats',
@@ -781,6 +785,11 @@ function renderMessages() {
         }
         const editedHtml = msg.edited ? `<span class="msg-edited">${t('edited') || '\u0438\u0437\u043c\u0435\u043d\u0435\u043d\u043e'}</span>` : '';
         const checkHtml = isMine ? `<span class="msg-status${msg.read ? ' read' : ''}">${msg.read ? '\u2713\u2713' : '\u2713'}</span>` : '';
+        // \u041f\u043e\u0434\u043f\u0438\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u0435\u043b\u044f \u043d\u0435 \u0441\u043e\u0448\u043b\u0430\u0441\u044c (\u043f\u043e\u0434\u0434\u0435\u043b\u043a\u0430) \u0438\u043b\u0438 \u043a\u043b\u044e\u0447 \u043f\u0438\u0440\u0430 \u0441\u043c\u0435\u043d\u0438\u043b\u0441\u044f \u2014
+        // \u043f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0430\u0435\u043c \u044f\u0432\u043d\u043e, \u044d\u0442\u043e \u0432\u0430\u0436\u043d\u0435\u0435 \u043a\u043e\u0441\u043c\u0435\u0442\u0438\u043a\u0438.
+        const authWarn = (msg.auth === 'forged' || msg.auth === 'key_changed')
+            ? `<div class="msg-authwarn">\u26a0 ${msg.auth === 'forged' ? t('auth_forged') : t('auth_keychg')}</div>`
+            : '';
 
         if (msg.videoMsg) {
             div.className = `message ${isMine ? 'sent' : 'received'} video-msg-wrap${isNew ? ' first' : ''}`;
@@ -862,6 +871,8 @@ function renderMessages() {
                 ${reactionsHtml}
             `;
         }
+
+        if (authWarn) { div.classList.add('msg-unverified'); div.insertAdjacentHTML('afterbegin', authWarn); }
 
         // Context menu on right-click and long-press
         div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg); });
@@ -3538,7 +3549,7 @@ socket.on('message', (msg) => {
 
     const chat = ensureChat(chatId, chatType, chatName);
     const ts = Date.now();
-    addMessage(chatId, { from: msg.from, text: msg.text, ts });
+    addMessage(chatId, { from: msg.from, text: msg.text, ts, auth: msg.auth });
 
     const isCurrent = state.currentChat && state.currentChat.id === chatId;
     if (!isCurrent) {

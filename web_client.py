@@ -40,6 +40,7 @@ from protocol import (
 from crypto_utils import (
     Identity, encrypt, decrypt,
     generate_group_key, seal_group_key, unseal_group_key,
+    split_bundle, build_signed, open_signed,
 )
 
 app = Flask(__name__)
@@ -266,33 +267,70 @@ class UserMessenger:
         if not key_file.exists():
             self.identity.save(str(key_file))
 
-        self.peer_keys: dict[str, bytes] = {}
+        self.peer_keys: dict[str, bytes] = {}      # user → X25519 (для ECDH)
+        self.peer_verify: dict[str, bytes] = {}    # user → Ed25519 (для подписи)
         self.group_keys: dict[str, bytes] = {}
         self.groups: dict[str, dict] = {}
+
+        # TOFU-пиннинг: бандл ключей пира, увиденный при первом контакте.
+        # Если сервер позже отдаёт другой ключ под тем же именем — это подмена
+        # (подмена при регистрации / MITM), и мы её не принимаем молча.
+        self._pins_file = data_dir / 'pins.json'
+        self._pins: dict[str, str] = _load_json(self._pins_file)  # user → bundle_b32
+        self.key_alerts: set[str] = set()          # пиры со сменившимся ключом
 
     def _q(self, labels):
         return self.transport.query(labels)
 
     def register(self) -> bool:
-        pk = b32encode(self.identity.public_bytes())
+        pk = b32encode(self.identity.public_bundle())
         return self._q([CMD_REGISTER, self.username] + chunk_string(pk, MAX_LABEL_LEN)).startswith('OK')
+
+    def _remember_peer(self, user: str, bundle: bytes) -> bytes | None:
+        """Пиннит бандл пира по TOFU. Возвращает доверенный X25519 или None,
+        если ключ сменился относительно закреплённого (подмена)."""
+        b32 = b32encode(bundle)
+        pinned = self._pins.get(user)
+        if pinned is None:
+            self._pins[user] = b32
+            try:
+                _save_json(self._pins_file, self._pins)
+            except OSError:
+                pass
+            self.key_alerts.discard(user)
+        elif pinned != b32:
+            # Ключ под этим именем изменился — держимся закреплённого.
+            self.key_alerts.add(user)
+            bundle = b32decode(pinned)
+        else:
+            self.key_alerts.discard(user)
+        x, ed = split_bundle(bundle)
+        self.peer_keys[user] = x
+        if ed:
+            self.peer_verify[user] = ed
+        return x
 
     def get_peer_key(self, user: str) -> bytes | None:
         if user in self.peer_keys:
             return self.peer_keys[user]
         res = self._q([CMD_GETKEY, user])
         if res.startswith('KEY:'):
-            k = b32decode(res[4:])
-            self.peer_keys[user] = k
-            return k
+            return self._remember_peer(user, b32decode(res[4:]))
         return None
+
+    def peer_verify_key(self, user: str) -> bytes | None:
+        if user not in self.peer_verify and user not in self.peer_keys:
+            self.get_peer_key(user)   # подтягивает и пиннит бандл
+        return self.peer_verify.get(user)
 
     def send_dm(self, to_user: str, text: str) -> dict:
         pk = self.get_peer_key(to_user)
         if not pk:
             return {'ok': False, 'error': f'User "{to_user}" not online. Must sign in first.'}
         shared = self.identity.derive_shared_key(pk)
-        ct = encrypt(text.encode('utf-8'), shared)
+        ctx = self.username.encode('utf-8') + b'\x00' + to_user.encode('utf-8')
+        signed = build_signed(self.identity, ctx, text.encode('utf-8'))
+        ct = encrypt(signed, shared)
         ok = self._send_chunked(CMD_SEND, [to_user, self.username], ct)
         return {'ok': ok, 'error': '' if ok else 'Send error'}
 
@@ -305,7 +343,8 @@ class UserMessenger:
             if res.startswith('MSG:'):
                 colon = res.index(':', 4)
                 fr, data = res[4:colon], res[colon + 1:]
-                msgs.append({'type': 'dm', 'from': fr, 'text': self._decrypt_from(fr, data)})
+                text, auth = self._decrypt_from(fr, data)
+                msgs.append({'type': 'dm', 'from': fr, 'text': text, 'auth': auth})
         return msgs
 
     def create_group(self, gid: str) -> bool:
@@ -330,7 +369,11 @@ class UserMessenger:
         gk = self.group_keys.get(gid)
         if not gk:
             return False
-        return self._send_chunked(CMD_GROUP_SEND, [gid, self.username], encrypt(text.encode('utf-8'), gk))
+        # Подпись обязательна именно в группе: общий ключ расшифровывает всё,
+        # и без подписи любой участник может выдать себя за другого.
+        ctx = self.username.encode('utf-8') + b'\x00' + gid.encode('utf-8')
+        signed = build_signed(self.identity, ctx, text.encode('utf-8'))
+        return self._send_chunked(CMD_GROUP_SEND, [gid, self.username], encrypt(signed, gk))
 
     def poll_group(self, gid: str) -> list[dict]:
         msgs = []
@@ -346,12 +389,17 @@ class UserMessenger:
                 gk = self.group_keys.get(gid)
                 if gk:
                     try:
-                        text = decrypt(b32decode(data), gk).decode('utf-8')
+                        plain = decrypt(b32decode(data), gk)
+                        ctx = fr.encode('utf-8') + b'\x00' + gid.encode('utf-8')
+                        pt, auth = open_signed(plain, self.peer_verify_key(fr), ctx)
+                        if fr in self.key_alerts:
+                            auth = 'key_changed'
+                        text = pt.decode('utf-8')
                     except Exception as e:
-                        text = f'[error: {e}]'
+                        text, auth = f'[error: {e}]', 'error'
                 else:
-                    text = '[no key]'
-                msgs.append({'type': 'group', 'group': gid, 'from': fr, 'text': text})
+                    text, auth = '[no key]', 'error'
+                msgs.append({'type': 'group', 'group': gid, 'from': fr, 'text': text, 'auth': auth})
         return msgs
 
     def fetch_groups(self):
@@ -456,13 +504,20 @@ class UserMessenger:
         return True
 
     def _decrypt_from(self, sender, data_b32):
+        """→ (text, auth). auth: verified | forged | unverified | unsigned |
+        key_changed | error."""
         try:
             pk = self.get_peer_key(sender)
             if not pk:
-                return '[key not found]'
-            return decrypt(b32decode(data_b32), self.identity.derive_shared_key(pk)).decode('utf-8')
+                return '[key not found]', 'error'
+            plain = decrypt(b32decode(data_b32), self.identity.derive_shared_key(pk))
+            ctx = sender.encode('utf-8') + b'\x00' + self.username.encode('utf-8')
+            text, status = open_signed(plain, self.peer_verify.get(sender), ctx)
+            if sender in self.key_alerts:
+                status = 'key_changed'
+            return text.decode('utf-8'), status
         except Exception as e:
-            return f'[error: {e}]'
+            return f'[error: {e}]', 'error'
 
 
 # ═══════════════════════════════════════════════════════════════════════
