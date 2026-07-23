@@ -117,15 +117,19 @@ def main():
         inbox = bob.poll_files()
         blobs = [f for f in inbox if f['name'] == 'blob.bin']
         check('file appears once in the inbox (no dup from retries)', len(blobs) == 1)
-        # download drops the first response of every chunk → resumable retry
+        # First download drops the first response of every chunk → resumable
+        # retry. Second download reuses the same (fid, seq) queries, which the
+        # transport has already "dropped once", so it runs clean with no retry.
+        h0 = bob.transport.server_hits.get(protocol.CMD_FILE_DOWNLOAD, 0)
         got_bytes = bob.download_file(blobs[0]['fid'], blobs[0]['from'])
+        h1 = bob.transport.server_hits.get(protocol.CMD_FILE_DOWNLOAD, 0)
         check('resumable download survives per-chunk loss', got_bytes == blob)
-        check('download actually retried chunks (server saw them >1x)',
-              bob.transport.server_hits.get(protocol.CMD_FILE_DOWNLOAD, 0) >
-              len(blob) // 250)                # more hits than chunks = retries happened
-        # a second full download still returns the same bytes (idempotent read)
-        check('re-download yields identical bytes',
-              bob.download_file(blobs[0]['fid'], blobs[0]['from']) == blob)
+        again = bob.download_file(blobs[0]['fid'], blobs[0]['from'])
+        h2 = bob.transport.server_hits.get(protocol.CMD_FILE_DOWNLOAD, 0)
+        lossy_hits, clean_hits = h1 - h0, h2 - h1
+        check('re-download yields identical bytes', again == blob)
+        check('the lossy download really retried (more hits than the clean one)',
+              lossy_hits > clean_hits)
 
         # direct idempotency probe: replay a completed single-chunk send verbatim
         mid = protocol.gen_msg_id()

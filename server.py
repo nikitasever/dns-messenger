@@ -13,6 +13,10 @@ from collections import defaultdict
 from dnslib import DNSRecord, RR, TXT, QTYPE, EDNS0
 
 EDNS_UDP_SIZE = 4096
+# Данных на один ответ скачивания. ~1400 символов + обрамление FDATA умещается
+# в один UDP-пакет под типовым MTU 1500 (без IP-фрагментации), а по сравнению с
+# прежними 250 режет число запросов на файл примерно в 5.6 раза.
+DOWNLOAD_PIECE = 1400
 
 from protocol import (
     CMD_REGISTER, CMD_GETKEY, CMD_SEND, CMD_POLL,
@@ -260,8 +264,12 @@ class RelayServer:
             if not finfo or not finfo['complete']:
                 return 'ERR:no_file'
             data = finfo['data_b32']
-        # Отдаём порциями по 250 символов (влезает в TXT)
-        chunk_size = 250
+        # Порция скачивания. Раньше было 250 символов «чтобы влезло в TXT», но
+        # EDNS0 (4096) позволяет куда больше. DOWNLOAD_PIECE подобран так, чтобы
+        # ответ FDATA укладывался в один UDP-пакет (<~1500 MTU) без фрагментации,
+        # и при этом сокращал число round-trip'ов в ~5-6 раз. По DoH ограничения
+        # MTU нет вовсе, так что там это тем более выигрыш.
+        chunk_size = DOWNLOAD_PIECE
         start = seq * chunk_size
         if start >= len(data):
             return 'EOF'
