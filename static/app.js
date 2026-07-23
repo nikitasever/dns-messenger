@@ -708,29 +708,40 @@ function renderMessages() {
             `;
         } else if (msg.file) {
             div.className = `message ${isMine ? 'sent' : 'received'} file-msg${isNew ? ' first' : ''}`;
+            const progressHtml = msg.uploading ? `
+                <div class="upload-progress">
+                    <div class="upload-progress-fill" style="width:0%"></div>
+                </div>
+                <div class="upload-progress-pct">0%</div>` : '';
+            const failedHtml = msg.uploadFailed ? `<div class="upload-failed">⚠ ${t('file_send_err') || 'Ошибка отправки'}</div>` : '';
             div.innerHTML = `
-                <div class="file-icon-wrap">&#x1F4C4;</div>
+                <div class="file-icon-wrap">${msg.uploading ? '⬆️' : '📄'}</div>
                 <div class="file-details">
                     ${!isMine && isGroup && isNew ? `<div class="sender" style="color:${avatarColor(msg.from)[0]}">${esc(msg.from)}</div>` : ''}
                     <div class="file-name">${esc(msg.file)}</div>
                     <div class="file-size">${formatSize(msg.size)}</div>
+                    ${progressHtml}
+                    ${failedHtml}
                 </div>
                 ${reactionsHtml}
             `;
-            if (msg.fid && !isMine) {
+            if (msg.fid && !isMine && !msg.uploading) {
                 div.onclick = () => downloadFile(msg.fid, msg.from, msg.file);
                 div.title = 'Click to download';
             }
         } else {
             div.className = `message ${isMine ? 'sent' : 'received'}${isNew ? ' first' : ''}`;
+            const previewUrl = firstUrl(bodyText);
+            const previewHtml = previewUrl ? linkPreviewHtml(previewUrl) : '';
             div.innerHTML = `
                 ${!isMine && isGroup && isNew ? `<div class="sender" style="color:${avatarColor(msg.from)[0]}">${esc(msg.from)}</div>` : ''}
                 ${replyHtml}
-                <div class="msg-text">${esc(bodyText)}<span class="msg-footer">
+                <div class="msg-text">${linkify(esc(bodyText))}<span class="msg-footer">
                     ${editedHtml}
                     <span class="msg-time">${formatTime(msg.ts)}</span>
                     ${checkHtml}
                 </span></div>
+                ${previewHtml}
                 ${reactionsHtml}
             `;
         }
@@ -918,7 +929,9 @@ $fileInput?.addEventListener('change', async () => {
     }
 
     const ts = Date.now();
-    addMessage(state.currentChat.id, { from: state.username, file: file.name, size: file.size, ts });
+    const uploadId = 'up_' + ts;
+    addMessage(state.currentChat.id, { from: state.username, file: file.name, size: file.size, ts, uploading: true, uploadId, id: uploadId });
+    renderMessages._forceBottom = true;
     renderMessages();
     renderChatList();
 
@@ -927,14 +940,51 @@ $fileInput?.addEventListener('change', async () => {
     fd.append('file', file);
 
     try {
-        const res = await fetch('/api/file/send', { method: 'POST', body: fd }).then(r => r.json());
-        if (res.ok) toast(t('file_sent'), 'success');
-        else toast(res.error || t('file_send_err'), 'error');
+        await uploadFileWithProgress('/api/file/send', fd, uploadId);
+        markUploadDone(uploadId, true);
+        toast(t('file_sent'), 'success');
     } catch (e) {
-        toast(t('server_unavailable'), 'error');
+        markUploadDone(uploadId, false);
+        toast((e && e.message) || t('file_send_err'), 'error');
     }
     $fileInput.value = '';
 });
+
+// Upload with progress via XHR; updates the progress bar on the placeholder message
+function uploadFileWithProgress(url, formData, uploadId) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.upload.onprogress = (e) => {
+            if (!e.lengthComputable) return;
+            const pct = Math.round((e.loaded / e.total) * 100);
+            const bar = document.querySelector(`.message[data-msg-id="${uploadId}"] .upload-progress-fill`);
+            const label = document.querySelector(`.message[data-msg-id="${uploadId}"] .upload-progress-pct`);
+            if (bar) bar.style.width = pct + '%';
+            if (label) label.textContent = pct + '%';
+        };
+        xhr.onload = () => {
+            try {
+                const res = JSON.parse(xhr.responseText || '{}');
+                if (res.ok) resolve(res);
+                else reject(new Error(res.error || t('file_send_err')));
+            } catch (e) { reject(new Error(t('file_send_err'))); }
+        };
+        xhr.onerror = () => reject(new Error(t('server_unavailable')));
+        xhr.send(formData);
+    });
+}
+function markUploadDone(uploadId, ok) {
+    const chat = state.currentChat && state.chats[state.currentChat.id];
+    if (!chat) return;
+    const msg = chat.messages.find(m => m.id === uploadId);
+    if (msg) {
+        msg.uploading = false;
+        if (!ok) msg.uploadFailed = true;
+        saveState();
+        if (state.currentChat) renderMessages();
+    }
+}
 
 async function downloadFile(fid, from, filename) {
     toast(t('file_dl'), 'info');
@@ -2488,6 +2538,64 @@ function toggleEmojiPanel() {
     panel.classList.add('show');
 }
 
+// ── Emoji picker for the input ──────────────────────────────────────
+const EMOJI_CATEGORIES = {
+    '😀': ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','😐','😑','😶','😏','😒','🙄','😬','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🥵','🥶','🥴','😵','🤯','🤠','🥳','😎','🤓','🧐','😕','😟','🙁','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','😈','👿','💀','💩','🤡','👻','👽','🤖'],
+    '👍': ['👍','👎','👌','🤌','🤏','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','👇','☝️','👋','🤚','🖐️','✋','🖖','👏','🙌','🤲','🙏','🤝','💪','🦾','✍️','💅','👀','👁️','👅','👄','🫀','🫁','🧠','🦷'],
+    '❤️': ['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','♥️','💯','💥','💫','💦','💨','🔥','⭐','🌟','✨','⚡','🎉','🎊'],
+    '🐶': ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🐺','🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞','🐢','🐍','🐙','🦑','🦀','🐠','🐟','🐬','🐳','🦈'],
+    '🍎': ['🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓','🫐','🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅','🍆','🥑','🥦','🌽','🥕','🍔','🍟','🍕','🌭','🥪','🌮','🌯','🍜','🍲','🍣','🍱','🍰','🎂','🍦','🍩','🍪','☕','🍺','🍷','🥂'],
+    '⚽': ['⚽','🏀','🏈','⚾','🎾','🏐','🏉','🎱','🏓','🏸','🥅','⛳','🎯','🎮','🎲','🎸','🎹','🥁','🎺','🎬','🎤','🚗','✈️','🚀','🏆','🥇','🎁','🎈','🎄','🔒','💡','📱','💻','⌚','📷','🔋','💰','💎'],
+};
+let emojiInsertPos = null;
+function toggleInputEmoji(ev) {
+    ev?.stopPropagation();
+    const picker = document.getElementById('input-emoji-picker');
+    if (!picker) return;
+    if (picker.style.display !== 'none') { picker.style.display = 'none'; return; }
+    buildEmojiPicker(picker);
+    picker.style.display = '';
+}
+function buildEmojiPicker(picker) {
+    const cats = Object.keys(EMOJI_CATEGORIES);
+    picker.innerHTML = `
+        <div class="emoji-tabs">${cats.map((c, i) => `<button class="emoji-tab${i===0?' active':''}" data-cat="${c}">${c}</button>`).join('')}</div>
+        <div class="emoji-grid" id="emoji-grid"></div>
+    `;
+    const grid = picker.querySelector('#emoji-grid');
+    const fill = (cat) => { grid.innerHTML = EMOJI_CATEGORIES[cat].map(e => `<button class="emoji-cell">${e}</button>`).join(''); };
+    fill(cats[0]);
+    picker.querySelectorAll('.emoji-tab').forEach(tab => {
+        tab.onclick = () => {
+            picker.querySelectorAll('.emoji-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            fill(tab.dataset.cat);
+        };
+    });
+    grid.onclick = (e) => {
+        const cell = e.target.closest('.emoji-cell');
+        if (cell) insertEmoji(cell.textContent);
+    };
+}
+function insertEmoji(emoji) {
+    const inp = $msgInput;
+    if (!inp) return;
+    const start = inp.selectionStart ?? inp.value.length;
+    const end = inp.selectionEnd ?? inp.value.length;
+    inp.value = inp.value.slice(0, start) + emoji + inp.value.slice(end);
+    const pos = start + emoji.length;
+    inp.focus();
+    inp.setSelectionRange(pos, pos);
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+}
+// Close emoji picker when clicking elsewhere
+document.addEventListener('click', (e) => {
+    const picker = document.getElementById('input-emoji-picker');
+    if (!picker || picker.style.display === 'none') return;
+    if (e.target.closest('#input-emoji-picker') || e.target.closest('#emoji-btn')) return;
+    picker.style.display = 'none';
+});
+
 function toggleReactionClick(msgId, emoji) {
     if (!state.currentChat) return;
     const chat = state.chats[state.currentChat.id];
@@ -3428,6 +3536,37 @@ function esc(s) {
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+}
+
+// Turn plain URLs in already-escaped text into clickable links + collect them.
+const URL_RE = /(https?:\/\/[^\s<]+[^\s<.,!?;:'")\]])/gi;
+function linkify(escapedText) {
+    return escapedText.replace(URL_RE, (m) => {
+        // m is already HTML-escaped (came from esc()); safe to embed
+        return `<a href="${m}" class="msg-link" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${m}</a>`;
+    });
+}
+// Extract the first URL from a raw (unescaped) string
+function firstUrl(text) {
+    if (!text) return null;
+    const m = text.match(/https?:\/\/[^\s<]+[^\s<.,!?;:'")\]]/i);
+    return m ? m[0] : null;
+}
+// Build a compact link-preview card (no external fetch — safe under CSP/DNS tunnel)
+function linkPreviewHtml(url) {
+    if (!url) return '';
+    let host = '', path = '';
+    try { const u = new URL(url); host = u.hostname.replace(/^www\./, ''); path = (u.pathname + u.search).slice(0, 60); }
+    catch (e) { return ''; }
+    const favicon = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`;
+    return `
+        <a class="link-preview" href="${esc(url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">
+            <img class="link-preview-icon" src="${esc(favicon)}" alt="" onerror="this.style.display='none'">
+            <div class="link-preview-body">
+                <div class="link-preview-host">${esc(host)}</div>
+                <div class="link-preview-path">${esc(path || url)}</div>
+            </div>
+        </a>`;
 }
 
 function formatTime(ts) {

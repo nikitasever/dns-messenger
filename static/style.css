@@ -2681,3 +2681,112 @@ html[data-list-wallpaper="emerald"] #chat-list {
 /* Pinned chat in list */
 .chat-item.chat-pinned { background: rgba(0,168,132,0.05); }
 .chat-item .chat-pin-icon { font-size: 11px; opacity: 0.7; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Sprint 3 — emoji picker, link preview, upload progress
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Input emoji picker */
+.emoji-picker {
+    position: absolute;
+    bottom: 68px;
+    left: 12px;
+    width: min(360px, 90vw);
+    max-height: 300px;
+    background: var(--bg-panel, #17212b);
+    border: 1px solid var(--border, #1f2c3a);
+    border-radius: 14px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: scaleIn 0.18s ease;
+}
+.emoji-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 6px;
+    border-bottom: 1px solid var(--border, #1f2c3a);
+    flex-shrink: 0;
+}
+.emoji-tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    font-size: 18px;
+    padding: 6px;
+    border-radius: 8px;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: background 0.15s ease, opacity 0.15s ease;
+}
+.emoji-tab:hover { background: rgba(127,127,127,0.12); opacity: 1; }
+.emoji-tab.active { background: var(--accent, #00a884); opacity: 1; }
+.emoji-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 2px;
+    padding: 8px;
+    overflow-y: auto;
+}
+.emoji-cell {
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    padding: 4px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.12s ease, transform 0.12s ease;
+}
+.emoji-cell:hover { background: rgba(127,127,127,0.15); transform: scale(1.2); }
+
+/* Clickable links in messages */
+.msg-link {
+    color: #4fc3f7;
+    text-decoration: none;
+    word-break: break-all;
+}
+.msg-link:hover { text-decoration: underline; }
+.message.sent .msg-link { color: #cdeffd; }
+
+/* Link preview card */
+.link-preview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+    padding: 8px 10px;
+    background: rgba(127,127,127,0.10);
+    border-left: 3px solid var(--accent, #00a884);
+    border-radius: 8px;
+    text-decoration: none;
+    max-width: 100%;
+    transition: background 0.15s ease;
+}
+.link-preview:hover { background: rgba(127,127,127,0.18); }
+.link-preview-icon { width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0; background: rgba(255,255,255,0.1); }
+.link-preview-body { min-width: 0; }
+.link-preview-host { font-size: 13px; font-weight: 600; color: var(--accent, #00a884); }
+.link-preview-path {
+    font-size: 12px; color: var(--text-muted, #8696a7);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Upload progress */
+.upload-progress {
+    height: 5px;
+    background: rgba(127,127,127,0.25);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 6px;
+}
+.upload-progress-fill {
+    height: 100%;
+    background: var(--accent, #00a884);
+    width: 0%;
+    transition: width 0.2s ease;
+    border-radius: 3px;
+}
+.upload-progress-pct { font-size: 11px; color: var(--text-muted, #8696a7); margin-top: 3px; }
+.upload-failed { font-size: 12px; color: #e05d5d; margin-top: 4px; }
