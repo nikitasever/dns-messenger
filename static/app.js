@@ -23,6 +23,7 @@ const I18N = {
         label_voice: 'Голосовое', label_video: 'Видео',
         push_unsupported: 'Push-уведомления не поддерживаются этим браузером',
         push_denied: 'Разрешение на уведомления не выдано',
+        push_blocked: 'Уведомления заблокированы для этого сайта — разрешите их в настройках браузера (значок замка в адресной строке)',
         push_enabled: 'Push включён', push_disabled: 'Push выключен',
         push_failed: 'Не удалось подписаться на push',
         push_test_sent: 'Пробное уведомление отправлено',
@@ -116,6 +117,7 @@ const I18N = {
         label_voice: 'Voice', label_video: 'Video',
         push_unsupported: 'Push notifications are not supported by this browser',
         push_denied: 'Notification permission was not granted',
+        push_blocked: 'Notifications are blocked for this site — allow them in your browser settings (lock icon in the address bar)',
         push_enabled: 'Push enabled', push_disabled: 'Push disabled',
         push_failed: 'Could not subscribe to push',
         push_test_sent: 'Test notification sent',
@@ -3930,9 +3932,12 @@ async function enablePush() {
         toast(t('push_unsupported'), 'error');
         return false;
     }
+    // Если разрешение уже отклонено, requestPermission молча вернёт 'denied'
+    // без диалога — подсказываем, что чинить это надо в настройках сайта.
+    const wasDenied = Notification.permission === 'denied';
     const perm = await Notification.requestPermission();
     if (perm !== 'granted') {
-        toast(t('push_denied'), 'error');
+        toast(wasDenied ? t('push_blocked') : t('push_denied'), 'error');
         return false;
     }
     try {
