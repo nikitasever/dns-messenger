@@ -23,6 +23,10 @@ const I18N = {
         forward_to: 'Переслать в…', forwarded_from: 'Переслано от', forwarded_to: 'Переслано в',
         no_other_chats: 'Нет других чатов',
         edit_own_only: 'Можно менять только свои сообщения', edit_text_only: 'Можно менять только текстовые сообщения',
+        forward: 'Переслать', edit: 'Изменить',
+        pin: 'Закрепить', unpin: 'Открепить', pinned: 'Закреплено', unpinned: 'Откреплено',
+        pinned_message: 'Закреплённое сообщение', chat_pinned: 'Чат закреплён', chat_unpinned: 'Чат откреплён',
+        chat_search_ph: 'Поиск по сообщениям…',
         attach_file: 'Прикрепить файл', send: 'Отправить',
         drop_file: 'Отпустите файл для отправки',
         // Header
@@ -104,6 +108,10 @@ const I18N = {
         forward_to: 'Forward to…', forwarded_from: 'Forwarded from', forwarded_to: 'Forwarded to',
         no_other_chats: 'No other chats',
         edit_own_only: 'You can only edit your own messages', edit_text_only: 'Only text messages can be edited',
+        forward: 'Forward', edit: 'Edit',
+        pin: 'Pin', unpin: 'Unpin', pinned: 'Pinned', unpinned: 'Unpinned',
+        pinned_message: 'Pinned message', chat_pinned: 'Chat pinned', chat_unpinned: 'Chat unpinned',
+        chat_search_ph: 'Search messages…',
         attach_file: 'Attach file', send: 'Send',
         drop_file: 'Drop file to send',
         voice_call: 'Voice call', video_call: 'Video call', add_member: '+ Member',
@@ -198,6 +206,7 @@ function applyStaticTranslations() {
     const set = (sel, prop, val) => { const el = document.querySelector(sel); if (el) el[prop] = val; };
 
     set('#search-input', 'placeholder', t('search'));
+    set('#chat-search-input', 'placeholder', t('chat_search_ph'));
     set('#msg-input', 'placeholder', t('message_placeholder'));
     set('#menu-btn', 'title', t('menu'));
     set('#voice-rec-btn', 'title', t('voice_msg_btn'));
@@ -259,9 +268,13 @@ function applyStaticTranslations() {
     const ch = document.querySelector('.contacts-header h2');
     if (ch) ch.textContent = t('contacts');
 
-    // Context menu actions
+    // Context menu actions (DOM order: reply, forward, pin, edit, copy, delete, info)
     const ctxButtons = document.querySelectorAll('.ctx-actions button');
-    const ctxLabels = [['↩', t('reply')], ['📋', t('copy')], ['🗑', t('delete')], ['ℹ', t('info')]];
+    const ctxLabels = [
+        ['↩', t('reply')], ['↪', t('forward')],
+        ['📌', t('pin')], ['✏️', t('edit')],
+        ['📋', t('copy')], ['🗑', t('delete')], ['ℹ', t('info')],
+    ];
     ctxButtons.forEach((btn, i) => {
         if (ctxLabels[i]) btn.innerHTML = `<span>${ctxLabels[i][0]}</span> ${ctxLabels[i][1]}`;
     });
@@ -458,6 +471,15 @@ function updateBadges() {
     setBadge('badge-group', groupCount);
 }
 
+function toggleChatPin(id) {
+    const chat = state.chats[id];
+    if (!chat) return;
+    chat.chatPinned = !chat.chatPinned;
+    saveState();
+    renderChatList();
+    toast(chat.chatPinned ? (t('chat_pinned') || 'Чат закреплён') : (t('chat_unpinned') || 'Чат откреплён'), 'success');
+}
+
 function setBadge(id, count) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -479,7 +501,13 @@ function renderChatList() {
             if (state.activeTab === 'group') return c.type === 'group';
             return true;
         })
-        .sort((a, b) => b[1].lastTs - a[1].lastTs);
+        .sort((a, b) => {
+            // Pinned chats float to the top
+            const pa = a[1].chatPinned ? 1 : 0;
+            const pb = b[1].chatPinned ? 1 : 0;
+            if (pa !== pb) return pb - pa;
+            return b[1].lastTs - a[1].lastTs;
+        });
 
     $chatList.innerHTML = '';
     for (const [id, chat] of entries) {
@@ -498,8 +526,9 @@ function renderChatList() {
         const timeStr = lastMsg ? formatTime(lastMsg.ts) : '';
 
         const div = document.createElement('div');
-        div.className = `chat-item${isActive ? ' active' : ''}`;
+        div.className = `chat-item${isActive ? ' active' : ''}${chat.chatPinned ? ' chat-pinned' : ''}`;
         div.onclick = () => selectChat(id);
+        div.oncontextmenu = (e) => { e.preventDefault(); toggleChatPin(id); };
         div.innerHTML = `
             ${avatarHtml(chat.name, isGroup)}
             <div class="chat-info">
@@ -509,10 +538,16 @@ function renderChatList() {
                 <div class="chat-preview">${esc(preview.slice(0, 80))}</div>
             </div>
             <div class="chat-meta">
+                ${chat.chatPinned ? '<span class="chat-pin-icon">📌</span>' : ''}
                 <span class="chat-time">${timeStr}</span>
                 ${chat.unread ? `<span class="unread-badge">${chat.unread}</span>` : ''}
             </div>
         `;
+        // Long-press to pin/unpin on touch
+        let cpTimer;
+        div.addEventListener('touchstart', () => { cpTimer = setTimeout(() => toggleChatPin(id), 550); }, { passive: true });
+        div.addEventListener('touchend', () => clearTimeout(cpTimer));
+        div.addEventListener('touchmove', () => clearTimeout(cpTimer));
         $chatList.appendChild(div);
     }
     updateBadges();
@@ -541,6 +576,7 @@ function renderHeader() {
             </div>
         </div>
         <div class="header-actions">
+            <button onclick="openChatSearch()" title="Поиск по чату">&#x1F50D;</button>
             ${!isGroup ? `
                 <button onclick="startCall(false)" title="Голосовой вызов">&#x1F4DE;</button>
                 <button onclick="startCall(true)" title="Видеозвонок">&#x1F4F9;</button>
@@ -548,6 +584,9 @@ function renderHeader() {
             ${isGroup ? `<button class="invite-btn" onclick="showInviteModal()">+ Участник</button>` : ''}
         </div>
     `;
+
+    // Refresh pinned bar for this chat
+    renderPinnedBar();
 
     // Fetch last seen for DM chats
     if (!isGroup) {
@@ -561,6 +600,8 @@ function renderMessages() {
     const chat = state.chats[state.currentChat.id];
     if (!chat) return;
     const isGroup = chat.type === 'group';
+    const wasNearBottom = renderMessages._forceBottom || isNearBottom();
+    renderMessages._forceBottom = false;
     $messages.innerHTML = '';
 
     let lastSender = null;
@@ -779,8 +820,17 @@ function renderMessages() {
         $messages.appendChild(div);
     }
 
+    // Mark pinned message
+    const pinnedChat = state.chats[state.currentChat.id];
+    if (pinnedChat && pinnedChat.pinnedId) {
+        const pel = $messages.querySelector(`.message[data-msg-id="${pinnedChat.pinnedId}"]`);
+        if (pel) pel.classList.add('is-pinned');
+    }
+    renderPinnedBar();
+
     requestAnimationFrame(() => {
-        $messages.scrollTop = $messages.scrollHeight;
+        if (wasNearBottom) $messages.scrollTop = $messages.scrollHeight;
+        updateScrollBtn();
     });
 }
 
@@ -826,6 +876,7 @@ async function sendMessage() {
 
     const ts = Date.now();
     addMessage(state.currentChat.id, { from: state.username, text, ts });
+    renderMessages._forceBottom = true;
     renderMessages();
     renderChatList();
 
@@ -2251,6 +2302,15 @@ function showContextMenu(e, msg) {
         const canEdit = msg && msg.from === state.username && !msg.voice && !msg.file && !msg.videoMsg && !msg.deleted;
         editBtn.style.display = canEdit ? '' : 'none';
     }
+    // Pin/Unpin label
+    const pinBtn = document.getElementById('ctx-pin-btn');
+    if (pinBtn) {
+        const chat = state.currentChat && state.chats[state.currentChat.id];
+        const isPinned = chat && chat.pinnedId === (msg && msg.id);
+        pinBtn.innerHTML = isPinned
+            ? `<span>📌</span> ${t('unpin') || 'Открепить'}`
+            : `<span>📌</span> ${t('pin') || 'Закрепить'}`;
+    }
 
     $ctxMenu.classList.add('show');
 
@@ -2596,6 +2656,144 @@ function ctxDelete() {
     }
 
     hideContextMenu();
+}
+
+function ctxPin() {
+    if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
+    const chat = state.chats[state.currentChat.id];
+    if (!chat) { hideContextMenu(); return; }
+    if (chat.pinnedId === ctxTargetMsg.id) {
+        chat.pinnedId = null;
+        toast(t('unpinned') || 'Откреплено', 'success');
+    } else {
+        chat.pinnedId = ctxTargetMsg.id;
+        toast(t('pinned') || 'Закреплено', 'success');
+    }
+    saveState();
+    renderMessages();
+    renderPinnedBar();
+    hideContextMenu();
+}
+
+// ── Pinned message bar ──────────────────────────────────────────────
+function renderPinnedBar() {
+    const bar = document.getElementById('pinned-bar');
+    if (!bar) return;
+    const chat = state.currentChat && state.chats[state.currentChat.id];
+    const msg = chat && chat.pinnedId && chat.messages.find(m => m.id === chat.pinnedId && !m.deleted);
+    if (!msg) { bar.style.display = 'none'; return; }
+    bar.style.display = '';
+    bar.innerHTML = `
+        <span class="pinned-icon">📌</span>
+        <div class="pinned-info">
+            <div class="pinned-title">${t('pinned_message') || 'Закреплённое сообщение'}</div>
+            <div class="pinned-text">${esc(msg.from)}: ${esc(bodyOf(msg).slice(0, 80))}</div>
+        </div>
+        <button class="pinned-unpin" onclick="event.stopPropagation();unpinCurrent()" title="Открепить">✕</button>
+    `;
+}
+function unpinCurrent() {
+    const chat = state.currentChat && state.chats[state.currentChat.id];
+    if (!chat) return;
+    chat.pinnedId = null;
+    saveState();
+    renderMessages();
+    renderPinnedBar();
+    toast(t('unpinned') || 'Откреплено', 'success');
+}
+function scrollToPinned() {
+    const chat = state.currentChat && state.chats[state.currentChat.id];
+    if (!chat || !chat.pinnedId) return;
+    const el = document.querySelector(`.message[data-msg-id="${chat.pinnedId}"]`);
+    if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('reply-flash');
+        setTimeout(() => el.classList.remove('reply-flash'), 900);
+    }
+}
+
+// ── In-chat message search ──────────────────────────────────────────
+let chatSearchMatches = [];
+let chatSearchIdx = -1;
+
+function openChatSearch() {
+    const bar = document.getElementById('chat-search-bar');
+    if (!bar) return;
+    bar.style.display = 'flex';
+    const inp = document.getElementById('chat-search-input');
+    inp.value = '';
+    inp.focus();
+    chatSearchMatches = [];
+    chatSearchIdx = -1;
+    updateChatSearchCount();
+}
+function closeChatSearch() {
+    const bar = document.getElementById('chat-search-bar');
+    if (bar) bar.style.display = 'none';
+    document.querySelectorAll('.message.search-hit, .message.search-current')
+        .forEach(el => el.classList.remove('search-hit', 'search-current'));
+    chatSearchMatches = [];
+    chatSearchIdx = -1;
+}
+function runChatSearch() {
+    const q = (document.getElementById('chat-search-input')?.value || '').trim().toLowerCase();
+    const chat = state.currentChat && state.chats[state.currentChat.id];
+    document.querySelectorAll('.message.search-hit, .message.search-current')
+        .forEach(el => el.classList.remove('search-hit', 'search-current'));
+    chatSearchMatches = [];
+    chatSearchIdx = -1;
+    if (!q || !chat) { updateChatSearchCount(); return; }
+    for (const m of chat.messages) {
+        if (m.deleted) continue;
+        if (bodyOf(m).toLowerCase().includes(q)) chatSearchMatches.push(m.id);
+    }
+    chatSearchMatches.forEach(id => {
+        const el = document.querySelector(`.message[data-msg-id="${id}"]`);
+        if (el) el.classList.add('search-hit');
+    });
+    if (chatSearchMatches.length) { chatSearchIdx = 0; focusSearchMatch(); }
+    updateChatSearchCount();
+}
+function chatSearchStep(dir) {
+    if (!chatSearchMatches.length) return;
+    chatSearchIdx = (chatSearchIdx + dir + chatSearchMatches.length) % chatSearchMatches.length;
+    focusSearchMatch();
+    updateChatSearchCount();
+}
+function focusSearchMatch() {
+    document.querySelectorAll('.message.search-current').forEach(el => el.classList.remove('search-current'));
+    const id = chatSearchMatches[chatSearchIdx];
+    const el = document.querySelector(`.message[data-msg-id="${id}"]`);
+    if (el) { el.classList.add('search-current'); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+}
+function updateChatSearchCount() {
+    const el = document.getElementById('chat-search-count');
+    if (!el) return;
+    el.textContent = chatSearchMatches.length ? `${chatSearchIdx + 1}/${chatSearchMatches.length}` : '0/0';
+}
+
+// ── Scroll-to-bottom button ─────────────────────────────────────────
+let scrollUnread = 0;
+function scrollMessagesToBottom(smooth) {
+    scrollUnread = 0;
+    updateScrollUnread();
+    if (!$messages) return;
+    $messages.scrollTo({ top: $messages.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+}
+function isNearBottom() {
+    if (!$messages) return true;
+    return $messages.scrollHeight - $messages.scrollTop - $messages.clientHeight < 120;
+}
+function updateScrollBtn() {
+    const btn = document.getElementById('scroll-bottom-btn');
+    if (!btn) return;
+    btn.style.display = isNearBottom() ? 'none' : 'flex';
+}
+function updateScrollUnread() {
+    const el = document.getElementById('scroll-unread');
+    if (!el) return;
+    if (scrollUnread > 0) { el.textContent = scrollUnread; el.style.display = ''; }
+    else el.style.display = 'none';
 }
 
 function ctxInfo() {
@@ -3014,7 +3212,11 @@ socket.on('message', (msg) => {
     }
 
     renderChatList();
-    if (isCurrent) renderMessages();
+    if (isCurrent) {
+        const wasNear = isNearBottom();
+        renderMessages();
+        if (!wasNear && msg.from !== state.username) { scrollUnread++; updateScrollUnread(); updateScrollBtn(); }
+    }
 });
 
 socket.on('file', (info) => {
@@ -3206,6 +3408,19 @@ function updateTypingUI(chatId) {
 }
 
 $searchInput?.addEventListener('input', () => renderChatList());
+
+// In-chat search input + navigation
+document.getElementById('chat-search-input')?.addEventListener('input', runChatSearch);
+document.getElementById('chat-search-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); chatSearchStep(e.shiftKey ? -1 : 1); }
+    if (e.key === 'Escape') closeChatSearch();
+});
+
+// Scroll-to-bottom button visibility
+$messages?.addEventListener('scroll', () => {
+    updateScrollBtn();
+    if (isNearBottom()) { scrollUnread = 0; updateScrollUnread(); }
+});
 
 // ── Utilities ───────────────────────────────────────────────────────
 function esc(s) {

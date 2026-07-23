@@ -2572,3 +2572,112 @@ html[data-list-wallpaper="emerald"] #chat-list {
 }
 .forward-item:hover { background: rgba(127,127,127,0.12); transform: translateX(2px); }
 .forward-item span { font-size: 14px; font-weight: 500; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Sprint 2 — in-chat search, pinned bar, scroll-to-bottom, pinned chats
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Pinned message bar (under header) */
+.pinned-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: var(--bg-panel, #17212b);
+    border-bottom: 1px solid var(--border, #1f2c3a);
+    cursor: pointer;
+    animation: slideInUp 0.2s ease;
+}
+.pinned-bar:hover { background: rgba(127,127,127,0.08); }
+.pinned-bar .pinned-icon { font-size: 15px; }
+.pinned-bar .pinned-info { flex: 1; min-width: 0; border-left: 2px solid var(--accent, #00a884); padding-left: 10px; }
+.pinned-bar .pinned-title { font-size: 12px; font-weight: 600; color: var(--accent, #00a884); }
+.pinned-bar .pinned-text {
+    font-size: 13px; color: var(--text-muted, #8696a7);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pinned-bar .pinned-unpin {
+    background: transparent; border: none; color: var(--text-muted, #8696a7);
+    font-size: 16px; cursor: pointer; padding: 4px 8px; border-radius: 6px;
+}
+.pinned-bar .pinned-unpin:hover { background: rgba(127,127,127,0.15); color: var(--text, #fff); }
+.message.is-pinned { box-shadow: inset 3px 0 0 var(--accent, #00a884); }
+
+/* In-chat search bar */
+.chat-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: var(--bg-panel, #17212b);
+    border-bottom: 1px solid var(--border, #1f2c3a);
+    animation: slideInUp 0.2s ease;
+}
+.chat-search-bar input {
+    flex: 1;
+    padding: 9px 14px;
+    background: var(--bg-input, #242f3d);
+    border: 1px solid var(--border, #1f2c3a);
+    border-radius: 999px;
+    color: var(--text, #f5f5f5);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+}
+.chat-search-bar input:focus { border-color: var(--accent, #00a884); }
+.chat-search-count { font-size: 13px; color: var(--text-muted, #8696a7); min-width: 42px; text-align: center; }
+.chat-search-nav, .chat-search-close {
+    background: transparent; border: none; color: var(--text-muted, #8696a7);
+    cursor: pointer; padding: 6px 8px; border-radius: 8px; font-size: 15px;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.chat-search-nav:hover, .chat-search-close:hover { background: rgba(127,127,127,0.15); color: var(--text, #fff); }
+.chat-search-close { font-size: 20px; }
+
+/* Search hit highlighting */
+.message.search-hit { outline: 1px solid rgba(0,168,132,0.4); outline-offset: 1px; border-radius: 8px; }
+.message.search-current {
+    outline: 2px solid var(--accent, #00a884);
+    background: rgba(0,168,132,0.12) !important;
+    border-radius: 8px;
+}
+
+/* Scroll-to-bottom button */
+.chat-area { position: relative; }
+.scroll-bottom-btn {
+    position: absolute;
+    right: 20px;
+    bottom: 90px;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: var(--bg-panel, #17212b);
+    border: 1px solid var(--border, #1f2c3a);
+    color: var(--text, #f5f5f5);
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+    z-index: 20;
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+.scroll-bottom-btn:hover { transform: translateY(-2px); background: rgba(127,127,127,0.12); }
+.scroll-bottom-btn .scroll-unread {
+    position: absolute;
+    top: -6px; right: -4px;
+    min-width: 20px; height: 20px;
+    padding: 0 5px;
+    border-radius: 10px;
+    background: var(--accent, #00a884);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Pinned chat in list */
+.chat-item.chat-pinned { background: rgba(0,168,132,0.05); }
+.chat-item .chat-pin-icon { font-size: 11px; opacity: 0.7; }
