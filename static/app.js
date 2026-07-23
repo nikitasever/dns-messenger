@@ -19,6 +19,10 @@ const I18N = {
         empty_desc: 'Зашифрованные сообщения через DNS-запросы. Работает даже при отключениях интернета.',
         message_placeholder: 'Сообщение', voice_msg_btn: 'Голосовое сообщение',
         typing_one: 'печатает...', typing_many: 'печатают...',
+        edited: 'изменено', editing: 'Редактирование',
+        forward_to: 'Переслать в…', forwarded_from: 'Переслано от', forwarded_to: 'Переслано в',
+        no_other_chats: 'Нет других чатов',
+        edit_own_only: 'Можно менять только свои сообщения', edit_text_only: 'Можно менять только текстовые сообщения',
         attach_file: 'Прикрепить файл', send: 'Отправить',
         drop_file: 'Отпустите файл для отправки',
         // Header
@@ -96,6 +100,10 @@ const I18N = {
         empty_desc: 'Encrypted messages via DNS queries. Works even during internet shutdowns.',
         message_placeholder: 'Message', voice_msg_btn: 'Voice message',
         typing_one: 'typing...', typing_many: 'are typing...',
+        edited: 'edited', editing: 'Editing',
+        forward_to: 'Forward to…', forwarded_from: 'Forwarded from', forwarded_to: 'Forwarded to',
+        no_other_chats: 'No other chats',
+        edit_own_only: 'You can only edit your own messages', edit_text_only: 'Only text messages can be edited',
         attach_file: 'Attach file', send: 'Send',
         drop_file: 'Drop file to send',
         voice_call: 'Voice call', video_call: 'Video call', add_member: '+ Member',
@@ -610,9 +618,10 @@ function renderMessages() {
                 const colon = quoteLine.indexOf(':');
                 let qName = '', qText = quoteLine;
                 if (colon > 0) { qName = quoteLine.slice(0, colon); qText = quoteLine.slice(colon + 1).trim(); }
-                replyHtml = `<div class="reply-quote"><div class="reply-name">${esc(qName)}</div><div class="reply-text">${esc(qText)}</div></div>`;
+                replyHtml = `<div class="reply-quote" onclick="event.stopPropagation();scrollToQuoted('${esc(qName)}',this)" data-qtext="${esc(qText)}"><div class="reply-name">${esc(qName)}</div><div class="reply-text">${esc(qText)}</div></div>`;
             }
         }
+        const editedHtml = msg.edited ? `<span class="msg-edited">${t('edited') || '\u0438\u0437\u043c\u0435\u043d\u0435\u043d\u043e'}</span>` : '';
         const checkHtml = isMine ? `<span class="msg-status${msg.read ? ' read' : ''}">${msg.read ? '\u2713\u2713' : '\u2713'}</span>` : '';
 
         if (msg.videoMsg) {
@@ -677,6 +686,7 @@ function renderMessages() {
                 ${!isMine && isGroup && isNew ? `<div class="sender" style="color:${avatarColor(msg.from)[0]}">${esc(msg.from)}</div>` : ''}
                 ${replyHtml}
                 <div class="msg-text">${esc(bodyText)}<span class="msg-footer">
+                    ${editedHtml}
                     <span class="msg-time">${formatTime(msg.ts)}</span>
                     ${checkHtml}
                 </span></div>
@@ -777,7 +787,7 @@ function renderMessages() {
 // ── Actions ─────────────────────────────────────────────────────────
 async function sendMessage() {
     if (!state.currentChat || !$msgInput.value.trim()) return;
-    const text = $msgInput.value.trim();
+    let text = $msgInput.value.trim();
     $msgInput.value = '';
     $msgInput.style.height = 'auto';
     if (typeof typingSentAt !== 'undefined' && typingSentAt) {
@@ -787,6 +797,33 @@ async function sendMessage() {
     }
 
     const chat = state.chats[state.currentChat.id];
+
+    // ── Edit mode ──
+    if (editingMsg) {
+        const target = editingMsg;
+        hideComposerBar();
+        target.text = text;
+        target.edited = true;
+        saveState();
+        renderMessages();
+        renderChatList();
+        if (chat.type === 'dm') {
+            try {
+                await fetch('/api/send', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to: state.currentChat.id, text: `__EDIT__:${target.id}:${text}` }),
+                });
+            } catch (e) {}
+        }
+        return;
+    }
+
+    // ── Reply mode: prepend quote line ──
+    if (replyingTo) {
+        text = `> ${replyingTo.from}: ${replyingTo.text.slice(0, 60)}\n${text}`;
+        hideComposerBar();
+    }
+
     const ts = Date.now();
     addMessage(state.currentChat.id, { from: state.username, text, ts });
     renderMessages();
@@ -2208,6 +2245,13 @@ function showContextMenu(e, msg) {
         if (el) el.classList.add('selected');
     }
 
+    // Show Edit only for own text messages
+    const editBtn = document.getElementById('ctx-edit-btn');
+    if (editBtn) {
+        const canEdit = msg && msg.from === state.username && !msg.voice && !msg.file && !msg.videoMsg && !msg.deleted;
+        editBtn.style.display = canEdit ? '' : 'none';
+    }
+
     $ctxMenu.classList.add('show');
 
     // Position
@@ -2228,21 +2272,87 @@ function hideContextMenu() {
     ctxTargetMsg = null;
 }
 
-// Swipe-to-reply: insert quote into the input
+// ── Reply / Edit composer ───────────────────────────────────────────
+let replyingTo = null;   // { id, from, text }
+let editingMsg = null;   // message object being edited
+
+function bodyOf(msg) {
+    let b = msg.text || (msg.voice ? '🎤 Голосовое' : '') || (msg.videoMsg ? '🎥 Видео' : '') || (msg.file ? '📎 ' + msg.file : '');
+    if (b.startsWith('> ')) { const nl = b.indexOf('\n'); if (nl > 0) b = b.slice(nl + 1); }
+    return b;
+}
+
+function ensureComposerBar() {
+    let bar = document.getElementById('composer-bar');
+    if (bar) return bar;
+    bar = document.createElement('div');
+    bar.id = 'composer-bar';
+    bar.className = 'composer-bar';
+    const area = document.getElementById('input-area');
+    area?.parentNode.insertBefore(bar, area);
+    return bar;
+}
+function hideComposerBar() {
+    replyingTo = null;
+    editingMsg = null;
+    document.getElementById('composer-bar')?.remove();
+}
+function showComposerBar(mode, msg) {
+    const bar = ensureComposerBar();
+    const icon = mode === 'edit' ? '✏️' : '↩';
+    const title = mode === 'edit' ? (t('editing') || 'Редактирование') : msg.from;
+    bar.innerHTML = `
+        <div class="composer-accent"></div>
+        <span class="composer-icon">${icon}</span>
+        <div class="composer-info">
+            <div class="composer-title">${esc(title)}</div>
+            <div class="composer-text">${esc(bodyOf(msg).slice(0, 80))}</div>
+        </div>
+        <button class="composer-close" onclick="hideComposerBar()">✕</button>
+    `;
+}
+
+// Swipe-to-reply / context reply: open reply composer
 function startReply(msg) {
     if (!msg) return;
-    const text = msg.text || msg.file || (msg.voice ? '🎤' : '');
-    const snippet = (text || '').toString().slice(0, 60);
-    const quote = `> ${msg.from}: ${snippet}\n`;
-    if ($msgInput) {
-        if (!$msgInput.value.startsWith('> ')) $msgInput.value = quote + $msgInput.value;
-        $msgInput.focus();
-    }
-    // Brief highlight on the message
+    editingMsg = null;
+    replyingTo = { id: msg.id, from: msg.from, text: bodyOf(msg) };
+    showComposerBar('reply', msg);
+    $msgInput?.focus();
     const el = document.querySelector(`.message[data-msg-id="${msg.id || ''}"]`);
+    if (el) { el.classList.add('reply-flash'); setTimeout(() => el.classList.remove('reply-flash'), 700); }
+}
+
+function startEdit(msg) {
+    if (!msg || msg.from !== state.username) return;
+    replyingTo = null;
+    editingMsg = msg;
+    showComposerBar('edit', msg);
+    if ($msgInput) {
+        $msgInput.value = bodyOf(msg);
+        $msgInput.focus();
+        $msgInput.setSelectionRange($msgInput.value.length, $msgInput.value.length);
+    }
+}
+
+// Scroll to the quoted original message (best-effort match by sender + text)
+function scrollToQuoted(qName, quoteEl) {
+    const qText = quoteEl?.dataset?.qtext || '';
+    const chat = state.currentChat && state.chats[state.currentChat.id];
+    if (!chat) return;
+    // Find the most recent matching message
+    let target = null;
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+        const m = chat.messages[i];
+        if (m.deleted) continue;
+        if (m.from === qName && bodyOf(m).startsWith(qText.slice(0, 40))) { target = m; break; }
+    }
+    if (!target) return;
+    const el = document.querySelector(`.message[data-msg-id="${target.id}"]`);
     if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.add('reply-flash');
-        setTimeout(() => el.classList.remove('reply-flash'), 700);
+        setTimeout(() => el.classList.remove('reply-flash'), 900);
     }
 }
 
@@ -2345,12 +2455,67 @@ function toggleReactionClick(msgId, emoji) {
 
 function ctxReply() {
     if (!ctxTargetMsg) { hideContextMenu(); return; }
-    const text = ctxTargetMsg.text || ctxTargetMsg.file || 'voice';
-    const prefix = `> ${ctxTargetMsg.from}: ${text.slice(0, 60)}\n`;
-    $msgInput.value = prefix;
-    $msgInput.focus();
-    $msgInput.setSelectionRange(prefix.length, prefix.length);
+    startReply(ctxTargetMsg);
     hideContextMenu();
+}
+
+function ctxEdit() {
+    if (!ctxTargetMsg) { hideContextMenu(); return; }
+    if (ctxTargetMsg.from !== state.username) { toast(t('edit_own_only') || 'Можно менять только свои сообщения', 'info'); hideContextMenu(); return; }
+    if (ctxTargetMsg.voice || ctxTargetMsg.file || ctxTargetMsg.videoMsg) { toast(t('edit_text_only') || 'Можно менять только текстовые сообщения', 'info'); hideContextMenu(); return; }
+    startEdit(ctxTargetMsg);
+    hideContextMenu();
+}
+
+function ctxForward() {
+    if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
+    const msg = ctxTargetMsg;
+    hideContextMenu();
+    // Build a chat picker
+    const chats = Object.values(state.chats)
+        .filter(c => c.id !== state.currentChat.id)
+        .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `
+        <div class="modal">
+            <h3>${t('forward_to') || 'Переслать в…'}</h3>
+            <div class="forward-list">
+                ${chats.length ? chats.map(c => `
+                    <div class="forward-item" data-id="${esc(c.id)}">
+                        ${avatarHtml(c.name, c.type === 'group', 'sm')}
+                        <span>${esc(c.name)}</span>
+                    </div>`).join('') : `<p style="color:var(--text-muted);text-align:center">${t('no_other_chats') || 'Нет других чатов'}</p>`}
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">${t('cancel')}</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll('.forward-item').forEach(item => {
+        item.onclick = () => { forwardMessageTo(item.dataset.id, msg); overlay.remove(); };
+    });
+}
+
+async function forwardMessageTo(chatId, msg) {
+    const chat = state.chats[chatId];
+    if (!chat) return;
+    const origin = msg.from;
+    const bodyText = bodyOf(msg);
+    const text = `↪ ${t('forwarded_from') || 'Переслано от'} ${origin}\n${bodyText}`;
+    const ts = Date.now();
+    addMessage(chatId, { from: state.username, text, ts, forwarded: true });
+    const url = chat.type === 'group' ? '/api/groups/send' : '/api/send';
+    const body = chat.type === 'group' ? { group: chatId, text } : { to: chatId, text };
+    try {
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+        if (!res.ok) { toast(res.error || t('send_error'), 'error'); return; }
+        toast((t('forwarded_to') || 'Переслано в') + ' ' + chat.name, 'success');
+        renderChatList();
+        if (state.currentChat?.id === chatId) renderMessages();
+    } catch (e) { toast(t('server_unavailable'), 'error'); }
 }
 
 function ctxCopy() {
@@ -2481,6 +2646,27 @@ function handleDeleteCommand(chatId, text) {
         msg.text = '';
         msg.file = '';
         msg.voice = false;
+        saveState();
+        if (state.currentChat?.id === chatId) renderMessages();
+        renderChatList();
+    }
+    return true;
+}
+
+// Handle incoming edit commands: __EDIT__:<id>:<newtext>
+function handleEditCommand(chatId, text) {
+    if (!text.startsWith('__EDIT__:')) return false;
+    const rest = text.slice('__EDIT__:'.length);
+    const sep = rest.indexOf(':');
+    if (sep < 0) return true;
+    const msgId = rest.slice(0, sep);
+    const newText = rest.slice(sep + 1);
+    const chat = state.chats[chatId];
+    if (!chat) return true;
+    const msg = chat.messages.find(m => m.id === msgId);
+    if (msg) {
+        msg.text = newText;
+        msg.edited = true;
         saveState();
         if (state.currentChat?.id === chatId) renderMessages();
         renderChatList();
@@ -2805,6 +2991,7 @@ socket.on('message', (msg) => {
 
     // Handle delete commands silently
     if (msg.text && handleDeleteCommand(chatId, msg.text)) return;
+    if (msg.text && handleEditCommand(chatId, msg.text)) return;
 
     const chat = ensureChat(chatId, chatType, chatName);
     const ts = Date.now();
