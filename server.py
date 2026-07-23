@@ -10,7 +10,9 @@ import threading
 import time
 from collections import defaultdict
 
-from dnslib import DNSRecord, RR, TXT, QTYPE
+from dnslib import DNSRecord, RR, TXT, QTYPE, EDNS0
+
+EDNS_UDP_SIZE = 4096
 
 from protocol import (
     CMD_REGISTER, CMD_GETKEY, CMD_SEND, CMD_POLL,
@@ -334,6 +336,13 @@ class RelayServer:
 
         prefix = qname[:-(len(self.domain) + 1)]
         labels = prefix.split('.')
+
+        # Клиент ставит случайный nonce первым лейблом (анти-кэш). Команды —
+        # всегда одиночные символы из DISPATCH, а nonce им не равен, поэтому,
+        # если первый лейбл не команда, это nonce — срезаем. Старый CLI без
+        # nonce при этом продолжает работать (первый лейбл сразу команда).
+        if labels and labels[0] not in self.DISPATCH and len(labels) > 1:
+            labels = labels[1:]
         cmd = labels[0] if labels else ''
 
         handler = self.DISPATCH.get(cmd)
@@ -351,6 +360,9 @@ class RelayServer:
             request.q.qname, QTYPE.TXT,
             rdata=TXT(parts), ttl=0,
         ))
+        # Отвечаем EDNS0, чтобы резолверы знали: сервер понимает большой буфер
+        # и не обязан резать ответ до 512 байт.
+        reply.add_ar(EDNS0(udp_len=EDNS_UDP_SIZE))
         return reply.pack()
 
     def run(self):

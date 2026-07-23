@@ -12,6 +12,10 @@ node -e "new Function(require('fs').readFileSync('static/app.js','utf8')); conso
 node -e "new Function(require('fs').readFileSync('static/sw.js','utf8')); console.log('sw.js: OK')"
 
 echo
+echo "== Python transport (nonce + EDNS0) tests =="
+python tests/test_transport.py
+
+echo
 echo "== Python Web Push tests =="
 python tests/test_webpush.py
 

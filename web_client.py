@@ -12,6 +12,7 @@ import os
 import threading
 import time
 import json
+import random
 import hashlib
 import secrets
 import base64
@@ -33,7 +34,7 @@ from protocol import (
     CMD_GROUP_POLL, CMD_GROUP_LIST,
     CMD_FILE_HEADER, CMD_FILE_CHUNK, CMD_FILE_POLL, CMD_FILE_DOWNLOAD,
     CMD_LIST_USERS,
-    MAX_LABEL_LEN, MAX_DOMAIN_LEN,
+    MAX_LABEL_LEN, MAX_DOMAIN_LEN, NONCE_OVERHEAD,
     b32encode, b32decode, chunk_string, gen_msg_id,
 )
 from crypto_utils import (
@@ -380,7 +381,7 @@ class UserMessenger:
         fid = gen_msg_id()
         ct_b32 = b32encode(ct)
 
-        overhead = len(f'f.{fid}.000.') + len(self.transport.domain) + 2
+        overhead = len(f'f.{fid}.000.') + len(self.transport.domain) + 2 + NONCE_OVERHEAD
         avail = MAX_DOMAIN_LEN - overhead
         per_chunk = max(MAX_LABEL_LEN, (avail // (MAX_LABEL_LEN + 1)) * MAX_LABEL_LEN)
         chunks = chunk_string(ct_b32, per_chunk) if ct_b32 else ['']
@@ -444,7 +445,7 @@ class UserMessenger:
         data_b32 = b32encode(ct)
         mid = gen_msg_id()
         overhead = '.'.join([cmd] + prefix + [mid, '00', '00', ''])
-        avail = MAX_DOMAIN_LEN - len(overhead) - len(self.transport.domain) - 2
+        avail = MAX_DOMAIN_LEN - len(overhead) - len(self.transport.domain) - 2 - NONCE_OVERHEAD
         per_q = max(MAX_LABEL_LEN, (avail // (MAX_LABEL_LEN + 1)) * MAX_LABEL_LEN)
         chunks = chunk_string(data_b32, per_q) if data_b32 else ['']
         total = len(chunks)
@@ -648,6 +649,27 @@ def _restore_messenger(username: str) -> UserMessenger | None:
     return m
 
 
+# Экспоненциальный backoff с джиттером для цикла опроса. Причины две:
+#   1) Скрытность: фиксированный «раз в 2 секунды» — характерный признак
+#      DNS-туннеля для IDS. Дрожащий интервал ломает регулярность.
+#   2) Экономия: в простое незачем долбить сервер каждые 2 с. При активности
+#      возвращаемся к быстрому опросу немедленно.
+POLL_MIN = 1.5          # сразу после сообщения — держим отзывчивость
+POLL_MAX = 8.0          # потолок в простое: компромисс между скрытностью и
+                        # задержкой push первого сообщения закрытому клиенту
+POLL_JITTER = 0.4       # ±40% случайного разброса
+
+
+def next_poll_delay(m: UserMessenger, got_message: bool) -> float:
+    base = getattr(m, 'poll_interval', POLL_MIN)
+    if got_message:
+        base = POLL_MIN                       # есть трафик — опрашиваем часто
+    else:
+        base = min(base * 1.6, POLL_MAX)      # тишина — плавно замедляемся
+    m.poll_interval = base
+    return base * (1.0 + random.uniform(-POLL_JITTER, POLL_JITTER))
+
+
 def start_poll_loop(m: UserMessenger):
     if m.running:
         return
@@ -655,21 +677,22 @@ def start_poll_loop(m: UserMessenger):
 
     def loop():
         while m.running:
+            got = False
             try:
                 for msg in m.poll_dm():
-                    buffer_or_emit('message', msg, m.username)
+                    buffer_or_emit('message', msg, m.username); got = True
                 for gid in list(m.group_keys):
                     for msg in m.poll_group(gid):
-                        buffer_or_emit('message', msg, m.username)
+                        buffer_or_emit('message', msg, m.username); got = True
                 for finfo in m.poll_files():
-                    buffer_or_emit('file', finfo, m.username)
+                    buffer_or_emit('file', finfo, m.username); got = True
                 m.poll_errors = 0
                 update_last_seen(m.username)
                 socketio.emit('status', {'connected': True}, room=m.username)
             except Exception:
                 m.poll_errors += 1
                 socketio.emit('status', {'connected': False, 'errors': m.poll_errors}, room=m.username)
-            time.sleep(2)
+            time.sleep(next_poll_delay(m, got))
 
     threading.Thread(target=loop, daemon=True).start()
 

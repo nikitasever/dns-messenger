@@ -10,7 +10,21 @@ Multi: пробует транспорты по порядку до первог
 import socket
 import urllib.request
 import ssl
-from dnslib import DNSRecord, QTYPE
+from dnslib import DNSRecord, QTYPE, EDNS0
+
+from protocol import gen_nonce
+
+# Клиент анонсирует, что готов принять UDP-ответ до этого размера. Меньше
+# усечения (TC=1) и меньше пакетов на крупные TXT (файлы, длинные сообщения).
+EDNS_UDP_SIZE = 4096
+
+
+def _build_query(labels: list[str], domain: str) -> bytes:
+    """DNS-запрос TXT с анти-кэш nonce первым лейблом и EDNS0-буфером."""
+    qname = gen_nonce() + '.' + '.'.join(labels) + '.' + domain
+    rec = DNSRecord.question(qname, 'TXT')
+    rec.add_ar(EDNS0(udp_len=EDNS_UDP_SIZE))
+    return rec.pack()
 
 
 class BaseTransport:
@@ -30,11 +44,10 @@ class UDPTransport(BaseTransport):
         self.sock.settimeout(5.0)
 
     def query(self, labels: list[str]) -> str:
-        qname = '.'.join(labels) + '.' + self.domain
-        pkt = DNSRecord.question(qname, 'TXT').pack()
+        pkt = _build_query(labels, self.domain)
         try:
             self.sock.sendto(pkt, self.server)
-            data, _ = self.sock.recvfrom(4096)
+            data, _ = self.sock.recvfrom(EDNS_UDP_SIZE)
             resp = DNSRecord.parse(data)
             for rr in resp.rr:
                 if rr.rtype == QTYPE.TXT:
@@ -66,8 +79,7 @@ class DoHTransport(BaseTransport):
         self._ctx = ssl.create_default_context()
 
     def query(self, labels: list[str]) -> str:
-        qname = '.'.join(labels) + '.' + self.domain
-        pkt = DNSRecord.question(qname, 'TXT').pack()
+        pkt = _build_query(labels, self.domain)
         req = urllib.request.Request(
             self.url,
             data=pkt,
