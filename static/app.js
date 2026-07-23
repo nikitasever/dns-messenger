@@ -3399,11 +3399,14 @@ function showNewGroup() {
         }).then(r => r.json());
 
         if (res.ok) {
-            ensureChat(name, 'group', name);
+            // Use the canonical id from the server (it lowercases group names) so
+            // the local chat key matches what /api/groups will report on reload.
+            const gid = res.group || name.toLowerCase();
+            ensureChat(gid, 'group', gid);
             saveState();
             renderChatList();
-            selectChat(name);
-            toast(t('group_created', name), 'success');
+            selectChat(gid);
+            toast(t('group_created', gid), 'success');
         } else {
             toast(res.error || t('group_create_err'), 'error');
         }
@@ -3864,9 +3867,40 @@ async function promptInstall() {
     deferredInstallPrompt = null;
 }
 
+// One-time cleanup: merge mixed-case group chats into their lowercase id
+// (fixes duplicates created before group ids were canonicalized server-side).
+function dedupeGroupChats() {
+    let changed = false;
+    for (const id of Object.keys(state.chats)) {
+        const chat = state.chats[id];
+        if (chat.type !== 'group') continue;
+        const lc = id.toLowerCase();
+        if (lc === id) continue;
+        const target = state.chats[lc];
+        if (target) {
+            // Merge messages (dedupe by id), keep the newer lastTs
+            const seen = new Set(target.messages.map(m => m.id));
+            for (const msg of chat.messages) {
+                if (!seen.has(msg.id)) { target.messages.push(msg); seen.add(msg.id); }
+            }
+            target.messages.sort((a, b) => a.ts - b.ts);
+            target.lastTs = Math.max(target.lastTs || 0, chat.lastTs || 0);
+            target.pinnedId = target.pinnedId || chat.pinnedId || null;
+            target.chatPinned = target.chatPinned || chat.chatPinned;
+        } else {
+            // Rename the chat to its lowercase id
+            state.chats[lc] = { ...chat };
+        }
+        delete state.chats[id];
+        changed = true;
+    }
+    if (changed) saveState();
+}
+
 async function init() {
     await unlockStorage();
     await loadState();
+    dedupeGroupChats();
     initTabs();
     registerServiceWorker();
 

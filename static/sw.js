@@ -2,7 +2,7 @@
    Offline app shell + notification handling.
    Network-first for navigation and API; cache-first for static assets. */
 
-const CACHE = 'dns-messenger-v1';
+const CACHE = 'dns-messenger-v2';
 const SHELL = [
     '/',
     '/static/app.js',
@@ -37,16 +37,15 @@ self.addEventListener('fetch', (event) => {
         return; // default browser handling
     }
 
-    // Static assets: cache-first
+    // Static assets: network-first so code/style updates land immediately when
+    // online; fall back to cache only when the network is unavailable (offline).
     if (url.pathname.startsWith('/static/')) {
         event.respondWith(
-            caches.match(req).then((cached) =>
-                cached || fetch(req).then((res) => {
-                    const copy = res.clone();
-                    caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-                    return res;
-                }).catch(() => cached)
-            )
+            fetch(req).then((res) => {
+                const copy = res.clone();
+                caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+                return res;
+            }).catch(() => caches.match(req))
         );
         return;
     }

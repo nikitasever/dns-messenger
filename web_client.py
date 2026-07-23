@@ -713,7 +713,9 @@ def api_group_create():
     ok = m.create_group(gid)
     if not ok:
         return jsonify({'ok': False, 'error': 'Failed — group may already exist'})
-    return jsonify({'ok': True})
+    # Return the canonical (lowercased) id so the client stores the same key the
+    # server will report from /api/groups — avoids duplicate chat entries.
+    return jsonify({'ok': True, 'group': gid})
 
 
 @app.route('/api/groups/invite', methods=['POST'])
