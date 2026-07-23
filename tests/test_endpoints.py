@@ -74,6 +74,21 @@ def main():
     r = c.post('/api/privacy/last-seen', json={'visibility': 'bogus'})
     check('/api/privacy/last-seen rejects bad value or requires auth', r.status_code in (200, 401, 403))
 
+    # Session revocation must be durable: it is what stops a captured
+    # pre-logout cookie from working again, now that SECRET_KEY is persisted.
+    import json as _json
+    name = '__sv_selftest__'
+    before = web_client.current_user_sv(name)
+    after = web_client.bump_user_sv(name)
+    check('bump_user_sv increments', after == before + 1)
+    check('bump_user_sv is visible to current_user_sv',
+          web_client.current_user_sv(name) == after)
+    on_disk = _json.loads(web_client.SV_FILE.read_text('utf-8'))
+    check('session revocation is written to disk', on_disk.get(name) == after)
+    # Leave no residue behind
+    on_disk.pop(name, None)
+    web_client._save_json(web_client.SV_FILE, on_disk)
+
     print(f"\n{passed} passed")
 
 

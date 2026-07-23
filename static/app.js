@@ -29,6 +29,7 @@ const I18N = {
         push_test_sent: 'Пробное уведомление отправлено',
         push_test_failed: 'Не удалось отправить',
         push_no_sw: 'Service worker не зарегистрирован (нужен HTTPS с доверенным сертификатом или localhost)',
+        session_expired: 'Сессия истекла — нужно войти заново',
         edited: 'изменено', editing: 'Редактирование',
         forward_to: 'Переслать в…', forwarded_from: 'Переслано от', forwarded_to: 'Переслано в',
         no_other_chats: 'Нет других чатов',
@@ -124,6 +125,7 @@ const I18N = {
         push_test_sent: 'Test notification sent',
         push_test_failed: 'Could not send',
         push_no_sw: 'Service worker is not registered (needs HTTPS with a trusted certificate, or localhost)',
+        session_expired: 'Session expired — please sign in again',
         edited: 'edited', editing: 'Editing',
         forward_to: 'Forward to…', forwarded_from: 'Forwarded from', forwarded_to: 'Forwarded to',
         no_other_chats: 'No other chats',
@@ -3251,6 +3253,37 @@ async function doLogout() {
     await fetch('/api/logout', { method: 'POST' });
     window.location.href = '/';
 }
+
+// ── Session guard ───────────────────────────────────────────────────
+// Протухшую сессию сервер отдаёт как 200 с {ok:false, error:'Not authorized'}.
+// Без единой точки перехвата интерфейс продолжал выглядеть залогиненным, а
+// действия молча не срабатывали — так и потерялась подписка на push.
+let sessionExpiredHandled = false;
+
+function onSessionExpired() {
+    if (sessionExpiredHandled) return;
+    sessionExpiredHandled = true;
+    toast(t('session_expired'), 'error');
+    setTimeout(() => { window.location.href = '/'; }, 1800);
+}
+
+function installSessionGuard() {
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+        const res = await origFetch(input, init);
+        if (sessionExpiredHandled) return res;
+        try {
+            const url = typeof input === 'string' ? input : (input && input.url) || '';
+            const ct = res.headers.get('content-type') || '';
+            if (url.includes('/api/') && !url.includes('/api/login') && ct.includes('json')) {
+                const peek = await res.clone().json();
+                if (peek && peek.ok === false && peek.error === 'Not authorized') onSessionExpired();
+            }
+        } catch (e) { /* не JSON или тело уже прочитано — не наше дело */ }
+        return res;
+    };
+}
+installSessionGuard();
 
 // ── FAB ─────────────────────────────────────────────────────────────
 let fabOpen = false;

@@ -42,16 +42,39 @@ from crypto_utils import (
 )
 
 app = Flask(__name__)
-# SECRET_KEY: must come from the environment. If not set, generate a random
-# key at startup instead of falling back to a known/hardcoded value — this
-# means existing sessions won't survive a restart, but no attacker can ever
-# forge a valid session cookie offline since the key is never a fixed string.
-_secret_key = os.environ.get('SECRET_KEY')
-if not _secret_key:
-    _secret_key = secrets.token_hex(32)
-    print('[!] SECRET_KEY not set in environment — generated a random key for this run. '
-          'Set the SECRET_KEY env var for persistent sessions across restarts.')
-app.config['SECRET_KEY'] = _secret_key
+# SECRET_KEY: the env var wins. Failing that, generate a random key once and
+# persist it, rather than either hardcoding a fallback or regenerating per run.
+# A fixed string in the source would let anyone forge session cookies offline;
+# regenerating silently logged every user out on each restart, while the UI
+# still looked signed in and only the API returned "Not authorized".
+SECRET_FILE = Path('.messenger_secret')
+
+
+def _load_or_create_secret() -> str:
+    env = os.environ.get('SECRET_KEY')
+    if env:
+        return env
+    try:
+        existing = SECRET_FILE.read_text('utf-8').strip()
+        if len(existing) >= 32:
+            return existing
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    try:
+        SECRET_FILE.write_text(key, 'utf-8')
+        try:
+            os.chmod(SECRET_FILE, 0o600)
+        except OSError:
+            pass          # Windows/иные ФС — не критично
+        print(f'[+] Session key generated: {SECRET_FILE} (set SECRET_KEY to override)')
+    except OSError as e:
+        print(f'[!] Could not persist the session key ({e}); sessions will not '
+              f'survive a restart. Set the SECRET_KEY env var.')
+    return key
+
+
+app.config['SECRET_KEY'] = _load_or_create_secret()
 
 # Harden session cookie: HttpOnly (default), SameSite=Lax (blocks cross-site
 # sends on top-level navigations/CSRF while still allowing normal same-site
@@ -142,8 +165,21 @@ def get_json_dict() -> dict:
 # version) approach: each login stamps the session with the user's current
 # version, and logout bumps the version so any previously issued cookie for
 # that account (forged or genuine) is rejected on the next request.
+#
+# The versions must outlive the process. They used to be memory-only, which
+# was masked by SECRET_KEY being regenerated per run (that invalidated every
+# cookie anyway). Now that the key is persisted, resetting the versions on
+# restart would resurrect exactly the pre-logout cookies this is meant to kill.
+SV_FILE = Path('.messenger_sv.json')
 _user_sv_lock = threading.Lock()
-_user_sv: dict[str, int] = {}
+
+
+def _read_sv() -> dict:
+    data = _load_json(SV_FILE)
+    return {k: int(v) for k, v in data.items() if isinstance(v, (int, str)) and str(v).isdigit()}
+
+
+_user_sv: dict[str, int] = _read_sv()
 
 
 def current_user_sv(username: str) -> int:
@@ -154,6 +190,11 @@ def current_user_sv(username: str) -> int:
 def bump_user_sv(username: str) -> int:
     with _user_sv_lock:
         _user_sv[username] = _user_sv.get(username, 0) + 1
+        try:
+            _save_json(SV_FILE, _user_sv)
+        except OSError as e:
+            # Не удалось записать — отзыв в этом процессе всё равно действует.
+            print(f'[!] Could not persist session revocation for {username}: {e}')
         return _user_sv[username]
 
 
@@ -577,7 +618,34 @@ def get_messenger() -> UserMessenger | None:
     if session.get('usv') != current_user_sv(username):
         return None
     with users_lock:
-        return users.get(username)
+        m = users.get(username)
+    if m:
+        return m
+    # Валидный cookie, но объекта нет — сервер перезапустили, а жил он только
+    # в памяти. Пересобираем: ровно то, что сделал бы повторный вход, только
+    # пользователя не выкидывает на экран логина посреди работы.
+    return _restore_messenger(username)
+
+
+def _restore_messenger(username: str) -> UserMessenger | None:
+    if username in get_blocked():
+        return None          # блокировку старый cookie обходить не должен
+    with users_lock:
+        m = users.get(username)
+        if m:
+            return m         # успели создать, пока ждали лок
+        try:
+            m = UserMessenger(username, transport)
+            if not m.register():
+                return None
+            users[username] = m
+        except Exception as e:
+            print(f'[!] Could not restore session for {username}: {e}')
+            return None
+    m.fetch_groups()
+    start_poll_loop(m)
+    print(f'[*] Session restored after restart: {username}')
+    return m
 
 
 def start_poll_loop(m: UserMessenger):

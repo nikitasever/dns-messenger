@@ -7,6 +7,7 @@
 .messenger_key.pem
 .messenger_vapid.json
 .messenger_push.json
+.messenger_secret
 
 # Python
 __pycache__/
@@ -17,3 +18,4 @@ __pycache__/
 # IDE
 .claude/
 .vscode/
+.messenger_sv.json
