@@ -19,6 +19,8 @@ const I18N = {
         empty_desc: 'Зашифрованные сообщения через DNS-запросы. Работает даже при отключениях интернета.',
         message_placeholder: 'Сообщение', voice_msg_btn: 'Голосовое сообщение',
         typing_one: 'печатает...', typing_many: 'печатают...',
+        you_prefix: 'Вы: ',
+        label_voice: 'Голосовое', label_video: 'Видео',
         edited: 'изменено', editing: 'Редактирование',
         forward_to: 'Переслать в…', forwarded_from: 'Переслано от', forwarded_to: 'Переслано в',
         no_other_chats: 'Нет других чатов',
@@ -104,6 +106,8 @@ const I18N = {
         empty_desc: 'Encrypted messages via DNS queries. Works even during internet shutdowns.',
         message_placeholder: 'Message', voice_msg_btn: 'Voice message',
         typing_one: 'typing...', typing_many: 'are typing...',
+        you_prefix: 'You: ',
+        label_voice: 'Voice', label_video: 'Video',
         edited: 'edited', editing: 'Editing',
         forward_to: 'Forward to…', forwarded_from: 'Forwarded from', forwarded_to: 'Forwarded to',
         no_other_chats: 'No other chats',
@@ -612,10 +616,10 @@ function renderChatList() {
         let preview = '';
         if (lastMsg) {
             if (lastMsg.system) preview = lastMsg.text;
-            else if (lastMsg.file) preview = '\uD83D\uDCCE ' + lastMsg.file;
             else {
-                const sender = lastMsg.from === state.username ? 'You: ' : (isGroup ? lastMsg.from + ': ' : '');
-                preview = sender + (lastMsg.text || '');
+                const sender = lastMsg.from === state.username ? t('you_prefix') : (isGroup ? lastMsg.from + ': ' : '');
+                // bodyOf strips the "> name: quoted\n" reply prefix and labels voice/video/file
+                preview = sender + bodyOf(lastMsg);
             }
         }
         const timeStr = lastMsg ? formatTime(lastMsg.ts) : '';
@@ -2536,7 +2540,7 @@ let replyingTo = null;   // { id, from, text }
 let editingMsg = null;   // message object being edited
 
 function bodyOf(msg) {
-    let b = msg.text || (msg.voice ? '🎤 Голосовое' : '') || (msg.videoMsg ? '🎥 Видео' : '') || (msg.file ? '📎 ' + msg.file : '');
+    let b = msg.text || (msg.voice ? '🎤 ' + t('label_voice') : '') || (msg.videoMsg ? '🎥 ' + t('label_video') : '') || (msg.file ? '📎 ' + msg.file : '');
     if (b.startsWith('> ')) { const nl = b.indexOf('\n'); if (nl > 0) b = b.slice(nl + 1); }
     return b;
 }

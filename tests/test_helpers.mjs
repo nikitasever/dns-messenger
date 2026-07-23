@@ -21,8 +21,9 @@ function firstUrl(text) {
     const m = text.match(/https?:\/\/[^\s<]+[^\s<.,!?;:'")\]]/i);
     return m ? m[0] : null;
 }
+const t = (k) => ({ label_voice: 'Голосовое', label_video: 'Видео' })[k];
 function bodyOf(msg) {
-    let b = msg.text || (msg.voice ? '🎤 Голосовое' : '') || (msg.videoMsg ? '🎥 Видео' : '') || (msg.file ? '📎 ' + msg.file : '');
+    let b = msg.text || (msg.voice ? '🎤 ' + t('label_voice') : '') || (msg.videoMsg ? '🎥 ' + t('label_video') : '') || (msg.file ? '📎 ' + msg.file : '');
     if (b.startsWith('> ')) { const nl = b.indexOf('\n'); if (nl > 0) b = b.slice(nl + 1); }
     return b;
 }

@@ -1650,7 +1650,7 @@ body {
     text-align: center;
 }
 
-.ctx-actions button:last-child { color: var(--red); }
+.ctx-actions button.ctx-danger { color: var(--red); }
 
 /* ── Message Reactions ───────────────────────────────────────────── */
 
@@ -2420,8 +2420,13 @@ html[data-list-wallpaper="custom"] #chat-list {
 }
 
 /* Color picker styling */
+/* `.modal input` sets width:100% + padding + margin; outrank it so the swatch
+   stays a small square instead of a full-width bar */
+.modal input.set-color,
 .set-color {
     width: 44px; height: 32px;
+    min-width: 44px; flex: 0 0 auto;
+    margin: 0;
     border: 1px solid var(--border, #1f2c3a);
     border-radius: 8px;
     background: transparent;
@@ -2547,6 +2552,7 @@ html[data-list-wallpaper="emerald"] #chat-list {
     margin-right: 4px;
     opacity: 0.8;
 }
+.message.sent .msg-edited { color: rgba(255,255,255,0.75); }
 
 /* Clickable reply quote */
 .reply-quote { cursor: pointer; transition: background 0.15s ease; }
@@ -2772,6 +2778,14 @@ html[data-list-wallpaper="emerald"] #chat-list {
     font-size: 12px; color: var(--text-muted, #8696a7);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Own bubbles have an accent background — muted/accent text is unreadable there */
+.message.sent .link-preview {
+    background: rgba(255,255,255,0.14);
+    border-left-color: rgba(255,255,255,0.65);
+}
+.message.sent .link-preview:hover { background: rgba(255,255,255,0.22); }
+.message.sent .link-preview-host { color: #fff; }
+.message.sent .link-preview-path { color: rgba(255,255,255,0.75); }
 
 /* Upload progress */
 .upload-progress {
