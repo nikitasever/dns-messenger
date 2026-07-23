@@ -5,6 +5,8 @@
 .messenger_blocked.json
 .messenger_cert.pem
 .messenger_key.pem
+.messenger_vapid.json
+.messenger_push.json
 
 # Python
 __pycache__/

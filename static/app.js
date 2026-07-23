@@ -21,6 +21,12 @@ const I18N = {
         typing_one: 'печатает...', typing_many: 'печатают...',
         you_prefix: 'Вы: ',
         label_voice: 'Голосовое', label_video: 'Видео',
+        push_unsupported: 'Push-уведомления не поддерживаются этим браузером',
+        push_denied: 'Разрешение на уведомления не выдано',
+        push_enabled: 'Push включён', push_disabled: 'Push выключен',
+        push_failed: 'Не удалось подписаться на push',
+        push_test_sent: 'Пробное уведомление отправлено',
+        push_test_failed: 'Не удалось отправить: сначала включите push',
         edited: 'изменено', editing: 'Редактирование',
         forward_to: 'Переслать в…', forwarded_from: 'Переслано от', forwarded_to: 'Переслано в',
         no_other_chats: 'Нет других чатов',
@@ -108,6 +114,12 @@ const I18N = {
         typing_one: 'typing...', typing_many: 'are typing...',
         you_prefix: 'You: ',
         label_voice: 'Voice', label_video: 'Video',
+        push_unsupported: 'Push notifications are not supported by this browser',
+        push_denied: 'Notification permission was not granted',
+        push_enabled: 'Push enabled', push_disabled: 'Push disabled',
+        push_failed: 'Could not subscribe to push',
+        push_test_sent: 'Test notification sent',
+        push_test_failed: 'Could not send: enable push first',
         edited: 'edited', editing: 'Editing',
         forward_to: 'Forward to…', forwarded_from: 'Forwarded from', forwarded_to: 'Forwarded to',
         no_other_chats: 'No other chats',
@@ -1774,8 +1786,16 @@ function buildSettingsSection(id) {
             ${toggleRow('Вибрация', 'notifVibro', true, 'На поддерживаемых устройствах')}
             ${toggleRow('Уведомления на рабочем столе', 'notifDesktop', true)}
             ${toggleRow('Показывать превью сообщений', 'msgPreview', true, 'Текст в уведомлении')}
+            <label class="set-row">
+                <div>
+                    <div class="set-label">Push при закрытой вкладке</div>
+                    <div class="set-hint">Уведомления от сервера, когда мессенджер полностью закрыт. Требует интернета.</div>
+                </div>
+                <span class="switch ${isPushEnabled()?'on':''}" id="push-switch"></span>
+            </label>
             <div class="set-row">
                 <button class="btn btn-secondary" id="test-notif">Протестировать звук</button>
+                <button class="btn btn-secondary" id="test-push">Проверить push</button>
             </div>
         `;
     }
@@ -2035,6 +2055,19 @@ function wireSettingsSection(id, root, overlay) {
 
     if (id === 'notif') {
         byId('test-notif')?.addEventListener('click', () => { playMessageSound(); vibrate(120); });
+        byId('test-push')?.addEventListener('click', sendTestPush);
+        const pushSw = byId('push-switch');
+        pushSw?.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const turningOn = !pushSw.classList.contains('on');
+            pushSw.classList.toggle('on', turningOn);   // отклик сразу, до запроса разрешения
+            if (turningOn) {
+                const ok = await enablePush();
+                pushSw.classList.toggle('on', ok);      // откат, если отказали
+            } else {
+                await disablePush();
+            }
+        });
     }
     if (id === 'privacy') {
         byId('logout-all')?.addEventListener('click', () => {
@@ -3852,7 +3885,89 @@ setInterval(() => {
 // ── PWA: service worker + install prompt ────────────────────────────
 function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('SW register failed', e));
+    navigator.serviceWorker.register('/sw.js')
+        .then(() => { if (isPushEnabled()) syncPushSubscription(); })
+        .catch((e) => console.warn('SW register failed', e));
+}
+
+// ─── Web Push (VAPID) ───────────────────────────────────────────────────
+// Уведомления от сервера, доходящие при полностью закрытой вкладке.
+// Отличие от showDesktopNotification: там страница жива и рисует сама.
+
+const PUSH_FLAG_KEY = () => `dns_push_${state.username || 'anon'}`;
+
+function isPushSupported() {
+    return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+function isPushEnabled() {
+    return localStorage.getItem(PUSH_FLAG_KEY()) === '1';
+}
+
+async function syncPushSubscription() {
+    // Подписка живёт в браузере, а сервер мог потерять её (перезапуск,
+    // очистка файла) — поэтому отправляем на сервер при каждом старте.
+    if (!isPushSupported()) return null;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+        const res = await fetch('/api/push/key').then((r) => r.json());
+        if (!res.ok) throw new Error('no vapid key');
+        sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: res.key,
+        });
+    }
+    await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: sub.toJSON() }),
+    });
+    return sub;
+}
+
+async function enablePush() {
+    if (!isPushSupported()) {
+        toast(t('push_unsupported'), 'error');
+        return false;
+    }
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') {
+        toast(t('push_denied'), 'error');
+        return false;
+    }
+    try {
+        await syncPushSubscription();
+        localStorage.setItem(PUSH_FLAG_KEY(), '1');
+        toast(t('push_enabled'), 'success');
+        return true;
+    } catch (e) {
+        console.warn('push subscribe failed', e);
+        toast(t('push_failed'), 'error');
+        return false;
+    }
+}
+
+async function disablePush() {
+    localStorage.removeItem(PUSH_FLAG_KEY());
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+            await fetch('/api/push/unsubscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ endpoint: sub.endpoint }),
+            });
+            await sub.unsubscribe();
+        }
+    } catch (e) { /* уже отписаны */ }
+    toast(t('push_disabled'), 'info');
+}
+
+async function sendTestPush() {
+    const res = await fetch('/api/push/test', { method: 'POST' }).then((r) => r.json()).catch(() => null);
+    if (res && res.ok) toast(t('push_test_sent'), 'success');
+    else toast((res && res.errors && res.errors[0]) || t('push_test_failed'), 'error');
 }
 
 let deferredInstallPrompt = null;

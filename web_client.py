@@ -25,6 +25,7 @@ from flask import (
 )
 from flask_socketio import SocketIO, emit, join_room
 
+import webpush
 from transport import UDPTransport, DoHTransport, MultiTransport
 from protocol import (
     CMD_REGISTER, CMD_GETKEY, CMD_SEND, CMD_POLL,
@@ -469,15 +470,21 @@ online_sockets: dict[str, int] = {}       # username → connected socket count
 
 def buffer_or_emit(event: str, data: dict, username: str):
     """Emit to user if online, otherwise buffer for later delivery."""
+    offline = False
     with msg_buffer_lock:
         if online_sockets.get(username, 0) > 0:
             socketio.emit(event, data, room=username)
         else:
+            offline = True
             if username not in msg_buffer:
                 msg_buffer[username] = []
             # Keep max 500 buffered messages per user
             if len(msg_buffer[username]) < 500:
                 msg_buffer[username].append({'event': event, 'data': data})
+    if offline:
+        # Нет живого сокета — вкладка закрыта. Открытая-но-свёрнутая вкладка
+        # рисует уведомление сама, здесь нужен именно серверный push.
+        push_notify(username, event, data)
 
 
 def flush_buffer(username: str):
@@ -486,6 +493,80 @@ def flush_buffer(username: str):
         buf = msg_buffer.pop(username, [])
     for item in buf:
         socketio.emit(item['event'], item['data'], room=username)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Web Push — уведомления при полностью закрытой вкладке
+# ═══════════════════════════════════════════════════════════════════════
+
+VAPID_FILE = Path('.messenger_vapid.json')
+PUSH_FILE = Path('.messenger_push.json')
+PUSH_SUBJECT = os.environ.get('PUSH_SUBJECT', 'mailto:admin@localhost')
+
+vapid_keys = webpush.load_or_create_vapid(VAPID_FILE)
+push_lock = threading.Lock()
+
+
+def get_push_subs() -> dict:
+    """{username: [subscription, ...]}"""
+    return _load_json(PUSH_FILE)
+
+
+def add_push_sub(username: str, sub: dict):
+    with push_lock:
+        subs = get_push_subs()
+        mine = [s for s in subs.get(username, []) if s.get('endpoint') != sub.get('endpoint')]
+        mine.append(sub)
+        subs[username] = mine[-5:]   # не более 5 устройств на пользователя
+        _save_json(PUSH_FILE, subs)
+
+
+def remove_push_sub(username: str, endpoint: str):
+    with push_lock:
+        subs = get_push_subs()
+        mine = [s for s in subs.get(username, []) if s.get('endpoint') != endpoint]
+        if mine:
+            subs[username] = mine
+        else:
+            subs.pop(username, None)
+        _save_json(PUSH_FILE, subs)
+
+
+def _push_body(event: str, data: dict) -> dict | None:
+    """Текст уведомления. Само сообщение не кладём — push-сервис чужой."""
+    sender = data.get('from') or '?'
+    group = data.get('group')
+    title = f'{sender} в {group}' if group else sender
+    if event == 'file':
+        return {'title': title, 'body': '📎 ' + (data.get('name') or 'файл'),
+                'tag': group or sender}
+    if event == 'message':
+        return {'title': title, 'body': 'Новое сообщение', 'tag': group or sender}
+    return None   # typing/read/status пушить незачем
+
+
+def push_notify(username: str, event: str, data: dict):
+    """Разослать push на все устройства пользователя. Не блокирует вызывающего."""
+    body = _push_body(event, data)
+    if not body:
+        return
+    subs = get_push_subs().get(username) or []
+    if not subs:
+        return
+
+    def worker():
+        payload = json.dumps(body, ensure_ascii=False).encode('utf-8')
+        for sub in subs:
+            try:
+                webpush.send_push(sub, payload, vapid_keys, sub=PUSH_SUBJECT)
+            except webpush.PushGone:
+                remove_push_sub(username, sub.get('endpoint', ''))
+            except Exception as e:
+                # Push — дополнение к сокету, а не замена: сообщение уже
+                # лежит в буфере, поэтому сбой здесь не должен ничего ронять.
+                print(f'[push] {username}: {type(e).__name__}: {e}')
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def get_messenger() -> UserMessenger | None:
@@ -760,6 +841,62 @@ def api_users():
 
 
 # ── Last seen ───────────────────────────────────────────────────────
+
+@app.route('/api/push/key')
+def api_push_key():
+    """Публичный VAPID-ключ для applicationServerKey."""
+    return jsonify({'ok': True, 'key': vapid_keys['public']})
+
+
+@app.route('/api/push/subscribe', methods=['POST'])
+def api_push_subscribe():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'})
+    sub = get_json_dict().get('subscription') or {}
+    keys = sub.get('keys') or {}
+    if not sub.get('endpoint') or not keys.get('p256dh') or not keys.get('auth'):
+        return jsonify({'ok': False, 'error': 'Invalid subscription'})
+    add_push_sub(m.username, {'endpoint': sub['endpoint'],
+                              'keys': {'p256dh': keys['p256dh'], 'auth': keys['auth']}})
+    return jsonify({'ok': True})
+
+
+@app.route('/api/push/unsubscribe', methods=['POST'])
+def api_push_unsubscribe():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'})
+    endpoint = get_json_dict().get('endpoint') or ''
+    if endpoint:
+        remove_push_sub(m.username, endpoint)
+    return jsonify({'ok': True})
+
+
+@app.route('/api/push/test', methods=['POST'])
+def api_push_test():
+    """Отправить себе пробное уведомление — проверка сквозной цепочки."""
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'})
+    subs = get_push_subs().get(m.username) or []
+    if not subs:
+        return jsonify({'ok': False, 'error': 'No subscriptions'})
+    payload = json.dumps({'title': 'DNS Messenger',
+                          'body': 'Пробное уведомление', 'tag': 'push-test'},
+                         ensure_ascii=False).encode('utf-8')
+    sent, errors = 0, []
+    for sub in subs:
+        try:
+            webpush.send_push(sub, payload, vapid_keys, sub=PUSH_SUBJECT)
+            sent += 1
+        except webpush.PushGone:
+            remove_push_sub(m.username, sub.get('endpoint', ''))
+            errors.append('gone')
+        except Exception as e:
+            errors.append(f'{type(e).__name__}: {e}')
+    return jsonify({'ok': sent > 0, 'sent': sent, 'errors': errors})
+
 
 @app.route('/api/privacy/last-seen', methods=['POST'])
 def api_privacy_last_seen():

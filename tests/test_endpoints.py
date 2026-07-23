@@ -51,6 +51,21 @@ def main():
         r = c.get(f'/static/icon-{size}.png')
         check(f'icon-{size}.png served', r.status_code == 200 and r.data[:8] == b'\x89PNG\r\n\x1a\n')
 
+    # VAPID public key is readable without auth (the client needs it to subscribe)
+    r = c.get('/api/push/key')
+    check('GET /api/push/key returns 200', r.status_code == 200)
+    key = r.get_json().get('key', '')
+    check('push key is a base64url uncompressed P-256 point',
+          len(web_client.webpush.b64u_decode(key)) == 65)
+    check('push key is stable across calls', c.get('/api/push/key').get_json()['key'] == key)
+
+    # Subscribing requires auth
+    r = c.post('/api/push/subscribe', json={'subscription': {
+        'endpoint': 'https://example.com/x', 'keys': {'p256dh': 'a', 'auth': 'b'}}})
+    check('/api/push/subscribe blocks unauthenticated', r.get_json().get('ok') is False)
+    r = c.post('/api/push/test')
+    check('/api/push/test blocks unauthenticated', r.get_json().get('ok') is False)
+
     # Protected API rejects unauthenticated access
     r = c.post('/api/send', json={'to': 'bob', 'text': 'hi'})
     check('/api/send blocks unauthenticated', r.status_code in (200, 401, 403) and b'"ok": true' not in r.data)

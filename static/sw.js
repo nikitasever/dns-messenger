@@ -2,7 +2,7 @@
    Offline app shell + notification handling.
    Network-first for navigation and API; cache-first for static assets. */
 
-const CACHE = 'dns-messenger-v2';
+const CACHE = 'dns-messenger-v3';
 const SHELL = [
     '/',
     '/static/app.js',
@@ -56,6 +56,42 @@ self.addEventListener('fetch', (event) => {
             fetch(req).catch(() => caches.match('/'))
         );
     }
+});
+
+// Server-sent push (VAPID) — fires even with every tab closed
+self.addEventListener('push', (event) => {
+    let data = {};
+    try { data = event.data ? event.data.json() : {}; } catch (e) { /* not JSON */ }
+    const title = data.title || 'DNS Messenger';
+    event.waitUntil(
+        self.registration.showNotification(title, {
+            body: data.body || 'Новое сообщение',
+            icon: '/static/icon-192.png',
+            badge: '/static/icon-192.png',
+            tag: data.tag || 'dns-push',
+            renotify: true,
+            data: { url: '/' },
+        })
+    );
+});
+
+// The push service can rotate a subscription; re-register so we keep receiving
+self.addEventListener('pushsubscriptionchange', (event) => {
+    event.waitUntil((async () => {
+        try {
+            const res = await fetch('/api/push/key');
+            const { key } = await res.json();
+            const sub = await self.registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: key,
+            });
+            await fetch('/api/push/subscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ subscription: sub.toJSON() }),
+            });
+        } catch (e) { /* retried on next page load */ }
+    })());
 });
 
 // Notification click → focus or open the app
