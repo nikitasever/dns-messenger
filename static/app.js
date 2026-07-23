@@ -27,7 +27,8 @@ const I18N = {
         push_enabled: 'Push включён', push_disabled: 'Push выключен',
         push_failed: 'Не удалось подписаться на push',
         push_test_sent: 'Пробное уведомление отправлено',
-        push_test_failed: 'Не удалось отправить: сначала включите push',
+        push_test_failed: 'Не удалось отправить',
+        push_no_sw: 'Service worker не зарегистрирован (нужен HTTPS с доверенным сертификатом или localhost)',
         edited: 'изменено', editing: 'Редактирование',
         forward_to: 'Переслать в…', forwarded_from: 'Переслано от', forwarded_to: 'Переслано в',
         no_other_chats: 'Нет других чатов',
@@ -121,7 +122,8 @@ const I18N = {
         push_enabled: 'Push enabled', push_disabled: 'Push disabled',
         push_failed: 'Could not subscribe to push',
         push_test_sent: 'Test notification sent',
-        push_test_failed: 'Could not send: enable push first',
+        push_test_failed: 'Could not send',
+        push_no_sw: 'Service worker is not registered (needs HTTPS with a trusted certificate, or localhost)',
         edited: 'edited', editing: 'Editing',
         forward_to: 'Forward to…', forwarded_from: 'Forwarded from', forwarded_to: 'Forwarded to',
         no_other_chats: 'No other chats',
@@ -2059,6 +2061,17 @@ function wireSettingsSection(id, root, overlay) {
         byId('test-notif')?.addEventListener('click', () => { playMessageSound(); vibrate(120); });
         byId('test-push')?.addEventListener('click', sendTestPush);
         const pushSw = byId('push-switch');
+        // Флаг в localStorage — намерение, а не факт. Разрешение могли отозвать
+        // в настройках браузера, подписку — сбросить: сверяемся и не показываем
+        // включённым то, что на деле не работает.
+        if (pushSw && isPushEnabled()) {
+            hasLivePushSubscription().then((live) => {
+                if (!live) {
+                    localStorage.removeItem(PUSH_FLAG_KEY());
+                    pushSw.classList.remove('on');
+                }
+            });
+        }
         pushSw?.addEventListener('click', async (e) => {
             e.preventDefault();
             const turningOn = !pushSw.classList.contains('on');
@@ -3908,23 +3921,45 @@ function isPushEnabled() {
 async function syncPushSubscription() {
     // Подписка живёт в браузере, а сервер мог потерять её (перезапуск,
     // очистка файла) — поэтому отправляем на сервер при каждом старте.
-    if (!isPushSupported()) return null;
-    const reg = await navigator.serviceWorker.ready;
+    // Бросаем, а не возвращаем null: молчаливый выход раньше выдавался
+    // вызывающему за успех, и флаг включался без единого запроса к серверу.
+    if (!isPushSupported()) throw new Error(t('push_unsupported'));
+
+    // navigator.serviceWorker.ready никогда не отвергается: если регистрация
+    // не удалась (например, самоподписанный сертификат), он висит вечно.
+    const reg = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, rej) => setTimeout(() => rej(new Error(t('push_no_sw'))), 8000)),
+    ]);
+
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
-        const res = await fetch('/api/push/key').then((r) => r.json());
-        if (!res.ok) throw new Error('no vapid key');
+        const keyRes = await fetch('/api/push/key').then((r) => r.json());
+        if (!keyRes.ok) throw new Error('no vapid key');
         sub = await reg.pushManager.subscribe({
             userVisibleOnly: true,
-            applicationServerKey: res.key,
+            applicationServerKey: keyRes.key,
         });
     }
-    await fetch('/api/push/subscribe', {
+    const res = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subscription: sub.toJSON() }),
-    });
+    }).then((r) => r.json());
+    // Сервер отвечает 200 и на отказ — проверяем тело, иначе «подписались»
+    // при истёкшей сессии выглядело бы успехом.
+    if (!res.ok) throw new Error(res.error || 'subscribe rejected');
     return sub;
+}
+
+async function hasLivePushSubscription() {
+    if (!isPushSupported() || Notification.permission !== 'granted') return false;
+    try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        return !!(reg && await reg.pushManager.getSubscription());
+    } catch (e) {
+        return false;
+    }
 }
 
 async function enablePush() {
@@ -3947,7 +3982,7 @@ async function enablePush() {
         return true;
     } catch (e) {
         console.warn('push subscribe failed', e);
-        toast(t('push_failed'), 'error');
+        toast(`${t('push_failed')}: ${e.message}`, 'error');
         return false;
     }
 }
@@ -3971,8 +4006,11 @@ async function disablePush() {
 
 async function sendTestPush() {
     const res = await fetch('/api/push/test', { method: 'POST' }).then((r) => r.json()).catch(() => null);
-    if (res && res.ok) toast(t('push_test_sent'), 'success');
-    else toast((res && res.errors && res.errors[0]) || t('push_test_failed'), 'error');
+    if (res && res.ok) { toast(t('push_test_sent'), 'success'); return; }
+    // Показываем настоящую причину: раньше любой отказ — включая «нет сессии» —
+    // выдавался за «сначала включите push», что уводило от реальной проблемы.
+    const reason = res && (res.error || (res.errors && res.errors[0]));
+    toast(reason ? `${t('push_test_failed')}: ${reason}` : t('push_test_failed'), 'error');
 }
 
 let deferredInstallPrompt = null;
