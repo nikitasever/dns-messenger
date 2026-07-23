@@ -25,6 +25,7 @@ from flask import (
     send_file as flask_send_file, Response,
 )
 from flask_socketio import SocketIO, emit, join_room
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import webpush
 from transport import UDPTransport, DoHTransport, MultiTransport
@@ -85,6 +86,13 @@ app.config['SECRET_KEY'] = _load_or_create_secret()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+
+# За обратным прокси (HTTPS-терминация на Caddy/nginx) реальный IP и схема
+# приходят в X-Forwarded-*. Включаем доверие к ним ТОЛЬКО по TRUST_PROXY=1 —
+# иначе при прямом доступе клиент мог бы подделать свой IP заголовком и обойти
+# rate-limit. Один хоп прокси. remote_addr после этого = настоящий IP клиента.
+if os.environ.get('TRUST_PROXY', '0') == '1':
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 socketio = SocketIO(app, cors_allowed_origins='*', manage_session=False)
 
