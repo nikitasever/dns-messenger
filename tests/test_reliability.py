@@ -39,8 +39,11 @@ class LossyTransport:
     given logical query — simulating a lost ACK that forces exactly one retry.
     Poll/read commands are never dropped, matching what the client retries."""
 
+    # Idempotent ops the client retries. FILE_DOWNLOAD is a pure read, so
+    # dropping its first response exercises resumable per-chunk download.
     RETRYABLE = {protocol.CMD_SEND, protocol.CMD_GROUP_SEND,
                  protocol.CMD_FILE_CHUNK, protocol.CMD_FILE_HEADER,
+                 protocol.CMD_FILE_DOWNLOAD,
                  protocol.CMD_REGISTER, protocol.CMD_GETKEY}
 
     def __init__(self, srv, domain):
@@ -114,8 +117,15 @@ def main():
         inbox = bob.poll_files()
         blobs = [f for f in inbox if f['name'] == 'blob.bin']
         check('file appears once in the inbox (no dup from retries)', len(blobs) == 1)
+        # download drops the first response of every chunk → resumable retry
         got_bytes = bob.download_file(blobs[0]['fid'], blobs[0]['from'])
-        check('downloaded file matches the original bytes', got_bytes == blob)
+        check('resumable download survives per-chunk loss', got_bytes == blob)
+        check('download actually retried chunks (server saw them >1x)',
+              bob.transport.server_hits.get(protocol.CMD_FILE_DOWNLOAD, 0) >
+              len(blob) // 250)                # more hits than chunks = retries happened
+        # a second full download still returns the same bytes (idempotent read)
+        check('re-download yields identical bytes',
+              bob.download_file(blobs[0]['fid'], blobs[0]['from']) == blob)
 
         # direct idempotency probe: replay a completed single-chunk send verbatim
         mid = protocol.gen_msg_id()

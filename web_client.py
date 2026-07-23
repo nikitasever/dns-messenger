@@ -295,12 +295,13 @@ class UserMessenger:
         return self.transport.query(labels)
 
     def _q_reliable(self, labels):
-        """Отправка чанка с повтором при потере пакета.
+        """Запрос с повтором при потере пакета (транзиентная ошибка).
 
-        Безопасно ТОЛЬКО для записей: сборка чанков на сервере идемпотентна по
-        mid (повтор перезапишет тем же и не создаст дубль). Для чтений (poll)
-        повтор недопустим — сервер снимает сообщение из ящика до ответа, и
-        повторный запрос вытащил бы уже следующее.
+        Безопасно только для ИДЕМПОТЕНТНЫХ операций:
+          • записи: сборка чанков/файла на сервере идемпотентна по id;
+          • чистые чтения без побочек: getkey, скачивание чанка файла.
+        НЕЛЬЗЯ для поллов (p/q/t) — сервер снимает сообщение из ящика до ответа,
+        и повтор вытащил бы уже следующее (или потерял текущее).
         """
         res = self._q(labels)
         tries = 0
@@ -490,18 +491,24 @@ class UserMessenger:
         return files
 
     def download_file(self, fid: str, sender: str) -> bytes | None:
+        # Докачиваемое скачивание: каждый чанк тянется через _q_reliable (повтор
+        # при потере пакета), уже полученное сохраняется — потеря одного чанка
+        # не рвёт всю загрузку. Чтение x.<fid>.<seq> идемпотентно, повтор
+        # безопасен. При жёсткой ошибке возвращаем None, а не обрезанный файл.
         all_data, seq = '', 0
         while True:
-            res = self._q([CMD_FILE_DOWNLOAD, fid, str(seq)])
-            if res == 'EOF' or res.startswith('ERR'):
+            res = self._q_reliable([CMD_FILE_DOWNLOAD, fid, str(seq)])
+            if res == 'EOF':
                 break
-            if res.startswith('FDATA:'):
-                parts = res[6:].split(':', 2)
-                if len(parts) == 3:
-                    all_data += parts[2]
-                    seq += 1
-                    if seq >= int(parts[1]):
-                        break
+            if not res.startswith('FDATA:'):
+                return None                      # ERR (в т.ч. после ретраев) — не отдаём огрызок
+            parts = res[6:].split(':', 2)
+            if len(parts) != 3:
+                return None
+            all_data += parts[2]
+            seq += 1
+            if seq >= int(parts[1]):
+                break
         if not all_data:
             return None
         pk = self.get_peer_key(sender)
