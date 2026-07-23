@@ -24,6 +24,10 @@ echo "== Python group impersonation integration test =="
 python tests/test_group_auth.py
 
 echo
+echo "== Python delivery reliability (ACK retry) test =="
+python tests/test_reliability.py
+
+echo
 echo "== Python Web Push tests =="
 python tests/test_webpush.py
 

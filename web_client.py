@@ -253,6 +253,18 @@ def init_admin():
 # Мессенджер (один инстанс на пользователя)
 # ═══════════════════════════════════════════════════════════════════════
 
+# Повтор отправки чанка при потере UDP-пакета. На DoH таймауты редки (там свой
+# TLS-ретрай), так что это в основном для прямого UDP-пути.
+SEND_RETRIES = 3
+SEND_RETRY_BACKOFF = 0.15   # секунды, растёт линейно с номером попытки
+
+
+def _is_transient_err(res: str) -> bool:
+    """Ошибка похожа на потерю пакета (повтор осмыслен), а не на отказ сервера."""
+    return res.startswith('ERR') and any(
+        s in res for s in ('timeout', 'no_response', 'no_transport'))
+
+
 class UserMessenger:
     def __init__(self, username: str, transport):
         self.username = username
@@ -282,9 +294,26 @@ class UserMessenger:
     def _q(self, labels):
         return self.transport.query(labels)
 
+    def _q_reliable(self, labels):
+        """Отправка чанка с повтором при потере пакета.
+
+        Безопасно ТОЛЬКО для записей: сборка чанков на сервере идемпотентна по
+        mid (повтор перезапишет тем же и не создаст дубль). Для чтений (poll)
+        повтор недопустим — сервер снимает сообщение из ящика до ответа, и
+        повторный запрос вытащил бы уже следующее.
+        """
+        res = self._q(labels)
+        tries = 0
+        while tries < SEND_RETRIES and _is_transient_err(res):
+            tries += 1
+            time.sleep(SEND_RETRY_BACKOFF * tries)
+            res = self._q(labels)
+        return res
+
     def register(self) -> bool:
         pk = b32encode(self.identity.public_bundle())
-        return self._q([CMD_REGISTER, self.username] + chunk_string(pk, MAX_LABEL_LEN)).startswith('OK')
+        # Идемпотентно (перезапись ключа) — можно повторять при потере пакета.
+        return self._q_reliable([CMD_REGISTER, self.username] + chunk_string(pk, MAX_LABEL_LEN)).startswith('OK')
 
     def _remember_peer(self, user: str, bundle: bytes) -> bytes | None:
         """Пиннит бандл пира по TOFU. Возвращает доверенный X25519 или None,
@@ -313,7 +342,7 @@ class UserMessenger:
     def get_peer_key(self, user: str) -> bytes | None:
         if user in self.peer_keys:
             return self.peer_keys[user]
-        res = self._q([CMD_GETKEY, user])
+        res = self._q_reliable([CMD_GETKEY, user])   # чтение, повтор безопасен
         if res.startswith('KEY:'):
             return self._remember_peer(user, b32decode(res[4:]))
         return None
@@ -436,10 +465,10 @@ class UserMessenger:
         total = len(chunks)
 
         name_b32 = b32encode(filename.encode('utf-8'))
-        if self._q([CMD_FILE_HEADER, to_user, self.username, fid, name_b32, str(len(ct)), str(total)]).startswith('ERR'):
+        if self._q_reliable([CMD_FILE_HEADER, to_user, self.username, fid, name_b32, str(len(ct)), str(total)]).startswith('ERR'):
             return {'ok': False, 'error': 'Header error'}
         for seq, chunk in enumerate(chunks):
-            if self._q([CMD_FILE_CHUNK, fid, str(seq)] + chunk_string(chunk, MAX_LABEL_LEN)).startswith('ERR'):
+            if self._q_reliable([CMD_FILE_CHUNK, fid, str(seq)] + chunk_string(chunk, MAX_LABEL_LEN)).startswith('ERR'):
                 return {'ok': False, 'error': f'Chunk error {seq}'}
         return {'ok': True, 'fid': fid}
 
@@ -499,7 +528,7 @@ class UserMessenger:
         total = len(chunks)
         for seq, chunk in enumerate(chunks):
             labels = [cmd] + prefix + [mid, str(seq), str(total)] + chunk_string(chunk, MAX_LABEL_LEN)
-            if self._q(labels).startswith('ERR'):
+            if self._q_reliable(labels).startswith('ERR'):
                 return False
         return True
 

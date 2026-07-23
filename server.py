@@ -51,6 +51,9 @@ class RelayServer:
         # fid → {name, from, to, size, total, chunks: {seq: data}, complete, data_b32}
         self.file_inbox: dict[str, list] = defaultdict(list)  # user → [fid, …]
 
+        # Идемпотентность повторов: mid уже доставленных сообщений
+        self.delivered_mids: dict[str, float] = {}
+
     # ═══════════════════════════════════════════════════════════════════
     # Личные сообщения
     # ═══════════════════════════════════════════════════════════════════
@@ -220,6 +223,8 @@ class RelayServer:
             finfo = self.files.get(fid)
             if not finfo:
                 return 'ERR:no_file'
+            if finfo['complete']:
+                return 'OK:complete'      # повтор после сборки — идемпотентно
             finfo['chunks'][seq] = data
             if len(finfo['chunks']) == finfo['total']:
                 finfo['data_b32'] = ''.join(finfo['chunks'][i] for i in range(finfo['total']))
@@ -280,10 +285,25 @@ class RelayServer:
     # Утилиты
     # ═══════════════════════════════════════════════════════════════════
 
+    def _remember_delivered(self, mid: str):
+        """Помечает mid доставленным (для идемпотентности повторов)."""
+        self.delivered_mids[mid] = time.time()
+        if len(self.delivered_mids) > 10000:
+            # Подрезаем самые старые, чтобы множество не росло бесконечно.
+            cutoff = sorted(self.delivered_mids.values())[2000]
+            self.delivered_mids = {k: v for k, v in self.delivered_mids.items() if v >= cutoff}
+
     def _assemble(self, mid, seq, total, data_b32, fr_u, dest,
                   chunks_store, meta_store, mail_store, is_group=False):
-        """Собирает чанки сообщения и кладёт в почтовый ящик."""
+        """Собирает чанки сообщения и кладёт в почтовый ящик.
+
+        Идемпотентно по mid: клиент повторяет чанк при потере ACK-пакета, и без
+        дедупликации повтор последнего чанка одночанкового сообщения породил бы
+        дубликат в ящике. Уже доставленный mid просто повторно квитируется.
+        """
         with self.lock:
+            if mid in self.delivered_mids:
+                return 'OK:delivered'
             if mid not in chunks_store:
                 chunks_store[mid] = {}
                 meta_store[mid] = (dest, total, fr_u)
@@ -301,6 +321,7 @@ class RelayServer:
                 })
                 del chunks_store[mid]
                 del meta_store[mid]
+                self._remember_delivered(mid)
                 tag = 'G' if is_group else '>'
                 print(f'[{tag}] {fr_u} -> {dest} ({len(encrypted)}B)')
                 return 'OK:delivered'
