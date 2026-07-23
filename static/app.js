@@ -370,30 +370,125 @@ function toast(text, type = 'info') {
     setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 300); }, 3000);
 }
 
-// ── localStorage persistence ────────────────────────────────────────
+// ── localStorage persistence (optional AES-GCM encryption) ──────────
 const STORAGE_KEY = () => `dns_messenger_${state.username}`;
+const ENC_FLAG_KEY = () => `dns_enc_${state.username}`;   // '1' when encryption is enabled
+const ENC_SALT_KEY = () => `dns_enc_salt_${state.username}`;
+
+let cryptoKey = null;        // in-memory CryptoKey (AES-GCM) when unlocked
+let saveDebounce = null;
+
+function isEncEnabled() { return localStorage.getItem(ENC_FLAG_KEY()) === '1'; }
+
+function b64(bytes) { return btoa(String.fromCharCode(...new Uint8Array(bytes))); }
+function unb64(str) { return Uint8Array.from(atob(str), c => c.charCodeAt(0)); }
+
+async function deriveKey(passphrase, salt) {
+    const enc = new TextEncoder();
+    const baseKey = await crypto.subtle.importKey('raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: 150000, hash: 'SHA-256' },
+        baseKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+    );
+}
+
+function collectState() {
+    const data = {};
+    for (const [id, chat] of Object.entries(state.chats)) {
+        data[id] = {
+            type: chat.type, name: chat.name, messages: chat.messages, lastTs: chat.lastTs,
+            pinnedId: chat.pinnedId || null, chatPinned: !!chat.chatPinned,
+        };
+    }
+    return data;
+}
+
+async function writeState(data) {
+    const json = JSON.stringify(data);
+    if (cryptoKey) {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(json));
+        localStorage.setItem(STORAGE_KEY(), 'enc:' + b64(iv) + ':' + b64(ct));
+    } else {
+        localStorage.setItem(STORAGE_KEY(), json);
+    }
+}
 
 function saveState() {
     if (!state.username) return;
-    try {
-        const data = {};
-        for (const [id, chat] of Object.entries(state.chats)) {
-            data[id] = { type: chat.type, name: chat.name, messages: chat.messages, lastTs: chat.lastTs };
-        }
-        localStorage.setItem(STORAGE_KEY(), JSON.stringify(data));
-    } catch (e) {}
+    // Debounce async writes; keep a synchronous plaintext fallback if not encrypting
+    clearTimeout(saveDebounce);
+    const data = collectState();
+    saveDebounce = setTimeout(() => { writeState(data).catch(() => {}); }, 120);
 }
 
-function loadState() {
+async function loadState() {
     if (!state.username) return;
     try {
         const raw = localStorage.getItem(STORAGE_KEY());
         if (!raw) return;
-        const data = JSON.parse(raw);
+        let json;
+        if (raw.startsWith('enc:')) {
+            if (!cryptoKey) return; // can't decrypt without key (should have been unlocked)
+            const [, ivB, ctB] = raw.split(':');
+            const pt = await crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: unb64(ivB) }, cryptoKey, unb64(ctB)
+            );
+            json = new TextDecoder().decode(pt);
+        } else {
+            json = raw;
+        }
+        const data = JSON.parse(json);
         for (const [id, chat] of Object.entries(data)) {
             state.chats[id] = { ...chat, unread: 0 };
         }
-    } catch (e) {}
+    } catch (e) { console.warn('loadState failed', e); }
+}
+
+// Unlock encrypted storage at startup (prompt for passphrase)
+async function unlockStorage() {
+    if (!isEncEnabled()) return true;
+    const saltStr = localStorage.getItem(ENC_SALT_KEY());
+    if (!saltStr) return true;
+    const salt = unb64(saltStr);
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const pass = prompt(attempt === 0
+            ? 'Введите пароль для расшифровки переписки:'
+            : 'Неверный пароль. Попробуйте ещё раз:');
+        if (pass === null) return false; // user cancelled → run without decrypting
+        try {
+            cryptoKey = await deriveKey(pass, salt);
+            // Verify by trying to decrypt current blob
+            const raw = localStorage.getItem(STORAGE_KEY());
+            if (raw && raw.startsWith('enc:')) {
+                const [, ivB, ctB] = raw.split(':');
+                await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(ivB) }, cryptoKey, unb64(ctB));
+            }
+            return true;
+        } catch (e) { cryptoKey = null; }
+    }
+    return false;
+}
+
+// Enable encryption with a new passphrase (re-encrypts current state)
+async function enableEncryption(passphrase) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    cryptoKey = await deriveKey(passphrase, salt);
+    localStorage.setItem(ENC_SALT_KEY(), b64(salt));
+    localStorage.setItem(ENC_FLAG_KEY(), '1');
+    await writeState(collectState());
+}
+
+// Disable encryption (decrypts and stores plaintext)
+async function disableEncryption() {
+    const data = collectState();
+    cryptoKey = null;
+    localStorage.removeItem(ENC_FLAG_KEY());
+    localStorage.removeItem(ENC_SALT_KEY());
+    await writeState(data);
 }
 
 // ── Chat management ─────────────────────────────────────────────────
@@ -1498,8 +1593,15 @@ function showDesktopNotification(title, body) {
     // Notify whenever the window isn't focused (covers minimized, hidden tab, other window)
     const focused = document.hasFocus && document.hasFocus();
     if (focused && !document.hidden) return;
+    // Prefer the service worker so notifications persist even when the tab is backgrounded/closing
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        try {
+            navigator.serviceWorker.controller.postMessage({ type: 'notify', title, body, tag: 'dns-msg-' + title });
+            return;
+        } catch (e) {}
+    }
     try {
-        const n = new Notification(title, { body, icon: '/static/favicon.png' });
+        const n = new Notification(title, { body, icon: '/static/icon-192.png' });
         n.onclick = () => { window.focus(); n.close(); };
         setTimeout(() => n.close(), 5000);
     } catch (e) {}
@@ -1799,6 +1901,20 @@ function buildSettingsSection(id) {
             </div>
             <div class="set-row">
                 <div>
+                    <div class="set-label">🔐 Шифрование переписки</div>
+                    <div class="set-hint">${isEncEnabled() ? 'Включено — история зашифрована паролем' : 'Защитить локальную историю паролем (AES-256)'}</div>
+                </div>
+                <span class="switch ${isEncEnabled()?'on':''}" id="enc-toggle"></span>
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">📲 Установить приложение</div>
+                    <div class="set-hint">Добавить на рабочий стол (PWA), работает офлайн</div>
+                </div>
+                <button class="btn btn-secondary" id="install-app">Установить</button>
+            </div>
+            <div class="set-row">
+                <div>
                     <div class="set-label">Сбросить кеш localStorage</div>
                     <div class="set-hint">Удалит все настройки и локальные данные</div>
                 </div>
@@ -1945,7 +2061,40 @@ function wireSettingsSection(id, root, overlay) {
             localStorage.clear();
             location.reload();
         });
+        byId('install-app')?.addEventListener('click', () => promptInstall());
+        byId('enc-toggle')?.addEventListener('click', async (e) => {
+            const sw = e.currentTarget;
+            if (isEncEnabled()) {
+                // Disable
+                if (!confirm('Отключить шифрование? История будет храниться в открытом виде.')) return;
+                await disableEncryption();
+                sw.classList.remove('on');
+                toast('Шифрование отключено', 'success');
+                buildSettingsSection && renderSettingsData(root, overlay);
+            } else {
+                const p1 = prompt('Придумайте пароль для шифрования переписки (мин. 4 символа):');
+                if (p1 === null) return;
+                if (p1.length < 4) { toast('Слишком короткий пароль', 'error'); return; }
+                const p2 = prompt('Повторите пароль:');
+                if (p2 === null) return;
+                if (p1 !== p2) { toast('Пароли не совпадают', 'error'); return; }
+                try {
+                    await enableEncryption(p1);
+                    sw.classList.add('on');
+                    toast('Шифрование включено. Пароль потребуется при следующем входе.', 'success');
+                    renderSettingsData(root, overlay);
+                } catch (err) {
+                    toast('Не удалось включить шифрование', 'error');
+                }
+            }
+        });
     }
+}
+
+// Re-render the "data" settings section in place (after enc toggle)
+function renderSettingsData(root, overlay) {
+    root.innerHTML = buildSettingsSection('data');
+    wireSettingsSection('data', root, overlay);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3693,9 +3842,33 @@ setInterval(() => {
 }, 10000);
 
 // ── Init ────────────────────────────────────────────────────────────
+// ── PWA: service worker + install prompt ────────────────────────────
+function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/sw.js').catch((e) => console.warn('SW register failed', e));
+}
+
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+});
+async function promptInstall() {
+    if (!deferredInstallPrompt) {
+        toast(t('install_unavailable') || 'Установка недоступна (уже установлено или не поддерживается)', 'info');
+        return;
+    }
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') toast(t('installed') || 'Приложение установлено', 'success');
+    deferredInstallPrompt = null;
+}
+
 async function init() {
-    loadState();
+    await unlockStorage();
+    await loadState();
     initTabs();
+    registerServiceWorker();
 
     // Apply translations and sync language label
     applyStaticTranslations();

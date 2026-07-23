@@ -41,7 +41,25 @@ from crypto_utils import (
 )
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dns-messenger-session-key')
+# SECRET_KEY: must come from the environment. If not set, generate a random
+# key at startup instead of falling back to a known/hardcoded value — this
+# means existing sessions won't survive a restart, but no attacker can ever
+# forge a valid session cookie offline since the key is never a fixed string.
+_secret_key = os.environ.get('SECRET_KEY')
+if not _secret_key:
+    _secret_key = secrets.token_hex(32)
+    print('[!] SECRET_KEY not set in environment — generated a random key for this run. '
+          'Set the SECRET_KEY env var for persistent sessions across restarts.')
+app.config['SECRET_KEY'] = _secret_key
+
+# Harden session cookie: HttpOnly (default), SameSite=Lax (blocks cross-site
+# sends on top-level navigations/CSRF while still allowing normal same-site
+# use), and Secure when served over HTTPS (opt-in via env since local/dev
+# deployments are often plain HTTP and Secure would break the cookie there).
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+
 socketio = SocketIO(app, cors_allowed_origins='*', manage_session=False)
 
 
@@ -99,13 +117,92 @@ def save_blocked(blocked: set):
     _save_json(BLOCKED_FILE, {'blocked': list(blocked)})
 
 
+def get_json_dict() -> dict:
+    """Safely pull a JSON object body from the request.
+
+    request.json (or .get_json()) happily returns whatever the client sent —
+    a list, a string, a number, None — and calling .get() on anything but a
+    dict raises AttributeError, which Flask turns into an unhandled 500. All
+    routes should go through this helper instead of touching request.json
+    directly so a malformed body (e.g. a JSON array) degrades to an empty
+    dict/validation error instead of crashing the server.
+    """
+    try:
+        d = request.get_json(silent=True, force=False)
+    except Exception:
+        d = None
+    return d if isinstance(d, dict) else {}
+
+
+# ── Per-user session revocation ─────────────────────────────────────────
+# Regular (non-admin) session cookies are stateless/signed, so without this
+# a captured pre-logout cookie would remain valid forever, even after the
+# legitimate user explicitly logs out. Mirror the admin 'sv' (session
+# version) approach: each login stamps the session with the user's current
+# version, and logout bumps the version so any previously issued cookie for
+# that account (forged or genuine) is rejected on the next request.
+_user_sv_lock = threading.Lock()
+_user_sv: dict[str, int] = {}
+
+
+def current_user_sv(username: str) -> int:
+    with _user_sv_lock:
+        return _user_sv.get(username, 0)
+
+
+def bump_user_sv(username: str) -> int:
+    with _user_sv_lock:
+        _user_sv[username] = _user_sv.get(username, 0) + 1
+        return _user_sv[username]
+
+
+def is_admin_session() -> bool:
+    """Check the session against the admin's current session-version.
+
+    Session cookies are stateless/signed, so a plain `session['is_admin']`
+    flag remains valid forever (even after logout) as long as the cookie is
+    replayed. To make logout actually revoke access, the admin record keeps
+    a 'sv' (session version) counter; each login stamps the session with the
+    current version, and logout bumps the version so any previously issued
+    cookie (forged or genuine) is rejected on the next request.
+    """
+    if not session.get('is_admin'):
+        return False
+    admin_data = _load_json(ADMIN_FILE)
+    current_sv = admin_data.get('sv', 0)
+    return session.get('sv') == current_sv
+
+
+# ── Simple in-memory rate limiting ──────────────────────────────────────
+_rate_limit_lock = threading.Lock()
+_rate_limit_hits: dict[str, list[float]] = {}
+
+
+def rate_limited(key: str, max_attempts: int = 5, window_seconds: float = 60.0) -> bool:
+    """Return True if `key` has exceeded max_attempts within window_seconds."""
+    now = time.time()
+    with _rate_limit_lock:
+        hits = _rate_limit_hits.setdefault(key, [])
+        hits[:] = [t for t in hits if now - t < window_seconds]
+        if len(hits) >= max_attempts:
+            return True
+        hits.append(now)
+        return False
+
+
+def client_ip() -> str:
+    return request.remote_addr or 'unknown'
+
+
 def init_admin():
     """Создать файл админа если его нет."""
     if not ADMIN_FILE.exists():
-        password = 'admin'  # дефолтный пароль, сменить при первом входе
+        # No known/predictable default password — generate a random one so
+        # nobody can log in as admin out-of-the-box without ever seeing it.
+        password = secrets.token_urlsafe(12)
         h, s = _hash_password(password)
-        _save_json(ADMIN_FILE, {'hash': h, 'salt': s, 'change_required': True})
-        print(f'[!] Admin password: {password} (change on first login at /admin)')
+        _save_json(ADMIN_FILE, {'hash': h, 'salt': s, 'change_required': True, 'sv': 0})
+        print(f'[!] Generated admin password: {password} (change it at /admin — this is shown only once)')
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -395,6 +492,9 @@ def get_messenger() -> UserMessenger | None:
     username = session.get('username')
     if not username:
         return None
+    # Reject cookies issued before the user's most recent logout.
+    if session.get('usv') != current_user_sv(username):
+        return None
     with users_lock:
         return users.get(username)
 
@@ -437,11 +537,50 @@ def index():
     return render_template('index.html', username=m.username)
 
 
+@app.route('/sw.js')
+def service_worker():
+    """Serve the service worker from root so it can control the whole scope."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'sw.js')
+    if os.path.isfile(path):
+        with open(path, 'rb') as fh:
+            resp = Response(fh.read(), mimetype='application/javascript')
+            resp.headers['Service-Worker-Allowed'] = '/'
+            resp.headers['Cache-Control'] = 'no-cache'
+            return resp
+    return Response('// not found', status=404, mimetype='application/javascript')
+
+
+@app.route('/manifest.json')
+def web_manifest():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'manifest.json')
+    if os.path.isfile(path):
+        with open(path, 'rb') as fh:
+            return Response(fh.read(), mimetype='application/manifest+json')
+    return Response('{}', status=404, mimetype='application/manifest+json')
+
+
+@app.route('/<name>.txt')
+def _ownership_proof(name):
+    """Serve ownership/verification .txt files placed in ./proof/ at the web root."""
+    safe = ''.join(ch for ch in name if ch.isalnum() or ch in '-_')
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'proof',
+                        f'{safe}.txt')
+    if os.path.isfile(path):
+        with open(path, 'rb') as fh:
+            return Response(fh.read(), mimetype='text/plain')
+    return Response('not found\n', status=404, mimetype='text/plain')
+
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
-    username = request.json.get('username', '').strip().lower()
-    password = request.json.get('password', '').strip()
-    mode = request.json.get('mode', 'anonymous')  # 'register', 'login', 'anonymous'
+    if rate_limited(f'login:{client_ip()}', max_attempts=10, window_seconds=60.0):
+        return jsonify({'ok': False, 'error': 'Too many attempts. Try again later.'}), 429
+    d = get_json_dict()
+    username = str(d.get('username') or '').strip().lower()
+    password = str(d.get('password') or '').strip()
+    mode = d.get('mode', 'anonymous')  # 'register', 'login', 'anonymous'
+    if not isinstance(mode, str):
+        mode = 'anonymous'
 
     if not username:
         return jsonify({'ok': False, 'error': 'Enter a username'})
@@ -492,6 +631,7 @@ def api_login():
     m.fetch_groups()
     start_poll_loop(m)
     session['username'] = username
+    session['usv'] = current_user_sv(username)
     print(f'[+] Login: {username} ({mode})')
     return jsonify({'ok': True})
 
@@ -499,7 +639,11 @@ def api_login():
 @app.route('/api/logout', methods=['POST'])
 def api_logout():
     username = session.pop('username', None)
+    session.pop('usv', None)
     if username:
+        # Bump the session-version so the cookie just cleared (and any other
+        # copy of it, captured before this call) can never be replayed again.
+        bump_user_sv(username)
         print(f'[-] Logout: {username}')
     return jsonify({'ok': True})
 
@@ -519,8 +663,12 @@ def api_send():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False, 'error': 'Not authorized'})
-    d = request.json
-    return jsonify(m.send_dm(d['to'], d['text']))
+    d = request.json or {}
+    to = d.get('to')
+    text = d.get('text')
+    if not to or not text:
+        return jsonify({'ok': False, 'error': 'Missing "to" or "text"'}), 400
+    return jsonify(m.send_dm(to, text))
 
 
 @app.route('/api/resolve', methods=['POST'])
@@ -528,7 +676,7 @@ def api_resolve():
     m = get_messenger()
     if not m:
         return jsonify({'found': False, 'error': 'Not authorized'})
-    user = request.json.get('user', '').strip().lower()
+    user = str(get_json_dict().get('user') or '').strip().lower()
     if not user:
         return jsonify({'found': False, 'error': 'Empty name'})
     if user == m.username:
@@ -555,7 +703,7 @@ def api_group_create():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False, 'error': 'Not authorized'})
-    gid = request.json.get('group', '').strip().lower()
+    gid = str(get_json_dict().get('group') or '').strip().lower()
     if not gid:
         return jsonify({'ok': False, 'error': 'Enter group name'})
     if len(gid) < 2 or len(gid) > 32:
@@ -573,8 +721,12 @@ def api_group_invite():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False})
-    d = request.json
-    return jsonify(m.invite_to_group(d['group'], d['user']))
+    d = request.json or {}
+    group = d.get('group')
+    user = d.get('user')
+    if not group or not user:
+        return jsonify({'ok': False, 'error': 'Missing "group" or "user"'}), 400
+    return jsonify(m.invite_to_group(group, user))
 
 
 @app.route('/api/groups/send', methods=['POST'])
@@ -582,8 +734,12 @@ def api_group_send():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False})
-    d = request.json
-    return jsonify({'ok': m.send_group(d['group'], d['text'])})
+    d = request.json or {}
+    group = d.get('group')
+    text = d.get('text')
+    if not group or not text:
+        return jsonify({'ok': False, 'error': 'Missing "group" or "text"'}), 400
+    return jsonify({'ok': m.send_group(group, text)})
 
 
 # ── Пользователи ────────────────────────────────────────────────
@@ -609,7 +765,7 @@ def api_privacy_last_seen():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False, 'error': 'Not authorized'})
-    vis = (request.json or {}).get('visibility', 'everyone')
+    vis = get_json_dict().get('visibility', 'everyone')
     if vis not in ('everyone', 'nobody'):
         return jsonify({'ok': False, 'error': 'Invalid value'})
     with last_seen_lock:
@@ -642,7 +798,9 @@ def api_last_seen_batch():
     m = get_messenger()
     if not m:
         return jsonify({})
-    usernames = request.json.get('users', [])
+    usernames = get_json_dict().get('users', [])
+    if not isinstance(usernames, list):
+        usernames = []
     result = {}
     with users_lock:
         online_set = {u for u, um in users.items() if um.running}
@@ -666,7 +824,9 @@ def api_profile_photo_set():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False, 'error': 'Not authorized'})
-    photo = request.json.get('photo', '')
+    photo = get_json_dict().get('photo', '')
+    if not isinstance(photo, str):
+        return jsonify({'ok': False, 'error': 'Invalid image format'}), 400
     # Validate: must be a data URL, max 100KB base64
     if photo and not photo.startswith('data:image/'):
         return jsonify({'ok': False, 'error': 'Invalid image format'})
@@ -678,6 +838,9 @@ def api_profile_photo_set():
 
 @app.route('/api/profile/photo/<username>')
 def api_profile_photo_get(username):
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
     profiles = get_profiles()
     p = profiles.get(username, {})
     return jsonify({'photo': p.get('photo', '')})
@@ -685,8 +848,13 @@ def api_profile_photo_get(username):
 
 @app.route('/api/profile/photos', methods=['POST'])
 def api_profile_photos_batch():
-    """Get photos for multiple users at once."""
-    usernames = request.json.get('users', [])
+    """Get photos for multiple users at once. Requires an authenticated session."""
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    usernames = get_json_dict().get('users', [])
+    if not isinstance(usernames, list):
+        usernames = []
     profiles = get_profiles()
     result = {}
     for u in usernames:
@@ -719,8 +887,12 @@ def api_file_download():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False})
-    d = request.json
-    result = m.download_file(d['fid'], d['from'])
+    d = request.json or {}
+    fid = d.get('fid')
+    frm = d.get('from')
+    if not fid or not frm:
+        return jsonify({'ok': False, 'error': 'Missing "fid" or "from"'}), 400
+    result = m.download_file(fid, frm)
     if result is None:
         return jsonify({'ok': False})
     # Сохранить в кэш для GET-загрузки (мобильные браузеры)
@@ -753,44 +925,57 @@ def api_file_get(token):
 
 @app.route('/admin')
 def admin_page():
-    if not session.get('is_admin'):
+    if not is_admin_session():
         return render_template('admin_login.html')
     return render_template('admin.html')
 
 
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
-    password = request.json.get('password', '')
+    if rate_limited(f'admin_login:{client_ip()}', max_attempts=5, window_seconds=60.0):
+        return jsonify({'ok': False, 'error': 'Too many attempts. Try again later.'}), 429
+    password = str(get_json_dict().get('password') or '')
     admin_data = _load_json(ADMIN_FILE)
     if not admin_data:
         return jsonify({'ok': False, 'error': 'Admin not configured'})
     if not _verify_password(password, admin_data['hash'], admin_data['salt']):
         return jsonify({'ok': False, 'error': 'Wrong password'})
     session['is_admin'] = True
+    session['sv'] = admin_data.get('sv', 0)
     return jsonify({'ok': True, 'change_required': admin_data.get('change_required', False)})
 
 
 @app.route('/api/admin/change-password', methods=['POST'])
 def admin_change_password():
-    if not session.get('is_admin'):
+    if not is_admin_session():
         return jsonify({'ok': False, 'error': 'Not authorized'})
-    new_pw = request.json.get('password', '')
+    new_pw = str(get_json_dict().get('password') or '')
     if len(new_pw) < 6:
         return jsonify({'ok': False, 'error': 'Minimum 6 characters'})
+    admin_data = _load_json(ADMIN_FILE)
     h, s = _hash_password(new_pw)
-    _save_json(ADMIN_FILE, {'hash': h, 'salt': s, 'change_required': False})
+    new_sv = admin_data.get('sv', 0) + 1
+    _save_json(ADMIN_FILE, {'hash': h, 'salt': s, 'change_required': False, 'sv': new_sv})
+    session['sv'] = new_sv
     return jsonify({'ok': True})
 
 
 @app.route('/api/admin/logout', methods=['POST'])
 def admin_logout():
+    # Bump the session-version so the cookie just cleared (and any other
+    # copy of it, forged or genuine) can never be replayed for admin access.
+    admin_data = _load_json(ADMIN_FILE)
+    if admin_data:
+        admin_data['sv'] = admin_data.get('sv', 0) + 1
+        _save_json(ADMIN_FILE, admin_data)
     session.pop('is_admin', None)
+    session.pop('sv', None)
     return jsonify({'ok': True})
 
 
 @app.route('/api/admin/users')
 def admin_users():
-    if not session.get('is_admin'):
+    if not is_admin_session():
         return jsonify({'ok': False})
     accounts = get_accounts()
     blocked = get_blocked()
@@ -810,9 +995,9 @@ def admin_users():
 
 @app.route('/api/admin/block', methods=['POST'])
 def admin_block():
-    if not session.get('is_admin'):
+    if not is_admin_session():
         return jsonify({'ok': False})
-    username = request.json.get('username', '')
+    username = str(get_json_dict().get('username') or '')
     blocked = get_blocked()
     blocked.add(username)
     save_blocked(blocked)
@@ -827,9 +1012,9 @@ def admin_block():
 
 @app.route('/api/admin/unblock', methods=['POST'])
 def admin_unblock():
-    if not session.get('is_admin'):
+    if not is_admin_session():
         return jsonify({'ok': False})
-    username = request.json.get('username', '')
+    username = str(get_json_dict().get('username') or '')
     blocked = get_blocked()
     blocked.discard(username)
     save_blocked(blocked)
@@ -839,9 +1024,9 @@ def admin_unblock():
 
 @app.route('/api/admin/delete', methods=['POST'])
 def admin_delete():
-    if not session.get('is_admin'):
+    if not is_admin_session():
         return jsonify({'ok': False})
-    username = request.json.get('username', '')
+    username = str(get_json_dict().get('username') or '')
     # Удалить аккаунт
     accounts = get_accounts()
     accounts.pop(username, None)
