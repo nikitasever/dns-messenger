@@ -1047,6 +1047,11 @@ def api_push_subscribe():
     keys = sub.get('keys') or {}
     if not sub.get('endpoint') or not keys.get('p256dh') or not keys.get('auth'):
         return jsonify({'ok': False, 'error': 'Invalid subscription'})
+    # SSRF-заслон: без него любой залогиненный пользователь мог бы подписать
+    # сервер на внутренний адрес/облачные метаданные и дёргать его как прокси
+    # через /api/push/test.
+    if not webpush.is_safe_push_endpoint(sub['endpoint']):
+        return jsonify({'ok': False, 'error': 'Invalid subscription'})
     add_push_sub(m.username, {'endpoint': sub['endpoint'],
                               'keys': {'p256dh': keys['p256dh'], 'auth': keys['auth']}})
     return jsonify({'ok': True})

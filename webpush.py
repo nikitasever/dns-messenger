@@ -12,8 +12,10 @@ ECDSA — в ней есть. Ноль новых зависимостей, чт
 """
 
 import base64
+import ipaddress
 import json
 import os
+import socket
 import struct
 import time
 import urllib.error
@@ -141,6 +143,42 @@ def encrypt_payload(payload: bytes, ua_public_raw: bytes, auth_secret: bytes) ->
 
 # ─── Отправка ────────────────────────────────────────────────────────────
 
+class UnsafeEndpoint(Exception):
+    """Endpoint отклонён проверкой SSRF (не https или указывает на приватный/
+    локальный адрес)."""
+
+
+def is_safe_push_endpoint(url: str) -> bool:
+    """SSRF-заслон: subscription.endpoint приходит от клиента без ограничений
+    (это его законное поле — у каждого push-провайдера свой домен), и без
+    проверки сервер по нему сходит сам через send_push. Без заслона любой
+    залогиненный пользователь мог бы подписаться на 169.254.169.254 (облачные
+    метаданные), localhost-сервисы или внутреннюю сеть и получить сервер как
+    прокси, читая результат через /api/push/test.
+
+    Требует https и резолвит хост, отклоняя loopback/private/link-local/
+    reserved/multicast адреса. Не защищает от DNS rebinding (хост резолвится
+    в безопасный IP на момент проверки, а на момент реального запроса — в
+    другой): для push-endpoint'ов подставных провайдеров это принятый разумный
+    компромисс, а не полноценная защита уровня "connect только на запиненный IP".
+    """
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != 'https' or not parsed.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror:
+        return False
+    if not infos:
+        return False
+    for _family, _type, _proto, _canon, sockaddr in infos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or
+                ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
 class PushGone(Exception):
     """Подписка мертва (404/410) — вызывающий код должен её удалить."""
 
@@ -153,6 +191,8 @@ def send_push(subscription: dict, payload: bytes, keys: dict,
     Бросает PushGone, если push-сервис сообщил, что подписки больше нет.
     """
     endpoint = subscription['endpoint']
+    if not is_safe_push_endpoint(endpoint):
+        raise UnsafeEndpoint(f'refusing to push to {endpoint!r}')
     dh = subscription.get('keys', {})
     body = encrypt_payload(payload, b64u_decode(dh['p256dh']), b64u_decode(dh['auth']))
 

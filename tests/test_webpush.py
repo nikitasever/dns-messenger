@@ -129,7 +129,46 @@ def main():
 
     check('header advertises the same key it signed with', f"k={keys['public']}" in header)
 
+    # ── SSRF guard on subscription.endpoint ──────────────────────────────
+    # subscription.endpoint is client-supplied and the server itself makes an
+    # HTTP request to it (send_push). Without validation, any logged-in user
+    # could point it at cloud metadata, localhost, or an internal service and
+    # use the server as a blind-ish proxy (errors surface via /api/push/test).
+    check('real FCM endpoint is accepted',
+          webpush.is_safe_push_endpoint('https://fcm.googleapis.com/fcm/send/abc'))
+    check('real Mozilla endpoint is accepted',
+          webpush.is_safe_push_endpoint('https://updates.push.services.mozilla.com/wpush/v2/abc'))
+    check('plain http is rejected (push services are always https)',
+          not webpush.is_safe_push_endpoint('http://fcm.googleapis.com/fcm/send/abc'))
+    check('cloud metadata address is rejected',
+          not webpush.is_safe_push_endpoint('https://169.254.169.254/latest/meta-data/'))
+    check('loopback is rejected',
+          not webpush.is_safe_push_endpoint('https://127.0.0.1:8080/x'))
+    check('localhost hostname is rejected',
+          not webpush.is_safe_push_endpoint('https://localhost/x'))
+    check('private 192.168/16 is rejected',
+          not webpush.is_safe_push_endpoint('https://192.168.1.5/x'))
+    check('private 10/8 is rejected',
+          not webpush.is_safe_push_endpoint('https://10.0.0.5/x'))
+    check('non-http(s) scheme is rejected',
+          not webpush.is_safe_push_endpoint('file:///etc/passwd'))
+    check('send_push refuses an unsafe endpoint before ever touching the network',
+          _raises(lambda: webpush.send_push(
+              {'endpoint': 'https://127.0.0.1/x',
+               'keys': {'p256dh': keys['public'], 'auth': webpush.b64u_encode(os.urandom(16))}},
+              b'{}', keys), webpush.UnsafeEndpoint))
+
     print(f"\n{passed} passed")
+
+
+def _raises(fn, exc_type) -> bool:
+    try:
+        fn()
+    except exc_type:
+        return True
+    except Exception:
+        return False
+    return False
 
 
 if __name__ == '__main__':
