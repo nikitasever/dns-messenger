@@ -13,5 +13,40 @@
 
 77-110-98-222.sslip.io {
     encode zstd gzip
-    reverse_proxy 127.0.0.1:8080
+
+    # ── Security headers ────────────────────────────────────────────────
+    # Всё это ставит прокси, а не приложение: заголовки одинаковы для всех
+    # ответов и не зависят от кода на бэкенде.
+    header {
+        # HTTPS-only на год. includeSubDomains безопасно: у этого хоста нет
+        # поддоменов. preload НЕ ставим — на общем суффиксе sslip.io это чужая
+        # зона, засабмиттить её в preload-список нельзя.
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # Не угадывать MIME (защита от sniff-based XSS в загруженных файлах).
+        X-Content-Type-Options "nosniff"
+        # Антикликджекинг для старых браузеров; CSP frame-ancestors дублирует
+        # это для новых.
+        X-Frame-Options "DENY"
+        # Приватность: не течь URL чата на сторонние ресурсы (favicon и т.п.).
+        Referrer-Policy "no-referrer"
+        # Разрешаем только то, что приложению реально нужно (звонки), остальное
+        # глушим.
+        Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(), usb=()"
+
+        # CSP. ВАЖНО: script-src/style-src вынуждены держать 'unsafe-inline' —
+        # в шаблонах есть инлайновые <script> и on*-обработчики, а инлайновый
+        # обработчик нельзя закрыть nonce'ом. Поэтому CSP здесь НЕ ловит
+        # инлайновую XSS-полезнагрузку (за это отвечает esc() на клиенте), но
+        # реально блокирует ВНЕШНЮЮ инъекцию скрипта (<script src=evil> не
+        # загрузится: script-src 'self'), фрейминг и подмену base/формы.
+        # connect-src: 'self' + wss (Socket.IO) + stun/turn-схемы (ICE звонков).
+        # img-src https: пока нужен для google-favicon превью — можно сузить до
+        # 'self' data: blob:, когда уедет задача про favicon.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' wss: https: stun: turn:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    }
+
+    reverse_proxy 127.0.0.1:8080 {
+        # Werkzeug палит версию питона и себя в Server: — срезаем на прокси.
+        header_down -Server
+    }
 }

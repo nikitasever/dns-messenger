@@ -54,6 +54,7 @@ sudo apt update && sudo apt install -y caddy
 
 ```bash
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile   # проверить синтаксис ДО рестарта
 sudo systemctl restart caddy
 sudo systemctl status caddy --no-pager      # должно быть active (running)
 ```
@@ -79,9 +80,29 @@ curl -I https://77-110-98-222.sslip.io/         # ожидаем 200 и вали
 curl -s https://77-110-98-222.sslip.io/api/push/key   # {"key":"...","ok":true}
 ```
 
+Проверить, что заголовки безопасности приехали и версия сервера больше не течёт:
+
+```bash
+curl -sI https://77-110-98-222.sslip.io/ | grep -iE \
+  'strict-transport|content-security|x-frame|x-content-type|referrer-policy|permissions-policy|^server'
+# Ожидаем строки HSTS/CSP/X-Frame-Options/nosniff/Referrer-Policy/Permissions-Policy
+# и НИ ОДНОЙ строки Server: Werkzeug/… (её срезает header_down -Server).
+```
+
 Открой в браузере **https://77-110-98-222.sslip.io** — замок должен быть
 «настоящим» (без предупреждений). После этого push-уведомления при закрытой
 вкладке можно включать в настройках.
+
+> **Обязательно после первого деплоя CSP:** открой DevTools → Console и
+> проверь боевые сценарии — вход, отправка сообщения, **звонок** (микрофон/
+> камера + STUN/TURN), превью ссылки. Если что-то не работает и в консоли есть
+> `Refused to … because it violates the … Content-Security-Policy directive`,
+> посмотри, какая директива сработала, и допиши нужный источник в CSP в
+> `Caddyfile` (чаще всего это `connect-src` для ICE-серверов звонков). CSP
+> применяется прокси, локально его не воспроизвести — поэтому финальная проверка
+> только здесь. Заголовок с `'unsafe-inline'` намеренный: в шаблонах есть
+> инлайновые обработчики, поэтому CSP тут ловит внешнюю инъекцию скрипта и
+> кликджекинг, а не инлайновую XSS (за неё отвечает `esc()` на клиенте).
 
 ## Замечания
 
