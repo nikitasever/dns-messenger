@@ -1298,10 +1298,15 @@ def admin_change_password():
 def admin_logout():
     # Bump the session-version so the cookie just cleared (and any other
     # copy of it, forged or genuine) can never be replayed for admin access.
-    admin_data = _load_json(ADMIN_FILE)
-    if admin_data:
-        admin_data['sv'] = admin_data.get('sv', 0) + 1
-        _save_json(ADMIN_FILE, admin_data)
+    #
+    # Gated on is_admin_session(): 'sv' is a single global counter for the one
+    # admin account, so without this check any anonymous POST here would kick
+    # the real admin out — a no-auth-required denial of service against them.
+    if is_admin_session():
+        admin_data = _load_json(ADMIN_FILE)
+        if admin_data:
+            admin_data['sv'] = admin_data.get('sv', 0) + 1
+            _save_json(ADMIN_FILE, admin_data)
     session.pop('is_admin', None)
     session.pop('sv', None)
     return jsonify({'ok': True})
@@ -1340,6 +1345,11 @@ def admin_block():
         m = users.get(username)
         if m:
             m.running = False
+    # Инвалидировать уже выданные cookie: get_messenger() сверяет только usv,
+    # а blocked-множество проверяется лишь при логине и при восстановлении
+    # сессии после рестарта сервера. Без bump'а уже залогиненный пользователь
+    # продолжал бы полноценно слать сообщения и файлы до ближайшего рестарта.
+    bump_user_sv(username)
     print(f'[ADMIN] Blocked: {username}')
     return jsonify({'ok': True})
 
