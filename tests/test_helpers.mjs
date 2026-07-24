@@ -81,6 +81,26 @@ test('linkify never turns a javascript: URI into a link', () => {
     const out = linkify(escAttr('run javascript:alert(1) please'));
     assert.ok(!/<a\s/i.test(out), 'javascript: scheme is not linkified at all');
 });
+// Regression for the localStorage plaintext-fallback (scan #13): when at-rest
+// encryption is ENABLED but the key isn't held (the unlock passphrase prompt was
+// cancelled or failed), the old writeState fell through to writing plaintext —
+// leaking the history the user asked to encrypt and clobbering the encrypted
+// blob. The fix returns 'skip' in exactly that state. Mirrors app.js.
+function storageWriteMode(hasKey, encEnabled) {
+    if (hasKey) return 'encrypt';
+    if (encEnabled) return 'skip';
+    return 'plaintext';
+}
+test('storage never falls back to plaintext when encryption is enabled but locked', () => {
+    assert.equal(storageWriteMode(false, true), 'skip');   // the vulnerable case
+});
+test('storage encrypts when the key is held, even if flag reads stale', () => {
+    assert.equal(storageWriteMode(true, true), 'encrypt');
+    assert.equal(storageWriteMode(true, false), 'encrypt');
+});
+test('storage writes plaintext only when encryption is genuinely off', () => {
+    assert.equal(storageWriteMode(false, false), 'plaintext');
+});
 test('bodyOf strips a leading reply quote', () => {
     assert.equal(bodyOf({ text: '> alice: hi there\nreal body' }), 'real body');
 });

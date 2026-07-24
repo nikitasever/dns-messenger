@@ -432,9 +432,34 @@ function collectState() {
     return data;
 }
 
+// How to persist state:
+//   'encrypt'   — we hold the key → AES-GCM.
+//   'skip'      — encryption is ENABLED but we don't hold the key (the unlock
+//                 prompt was cancelled or failed). Writing plaintext here would
+//                 both leak the history the user asked to encrypt AND overwrite
+//                 the existing encrypted blob — so we persist NOTHING this
+//                 session instead of silently downgrading to plaintext.
+//   'plaintext' — encryption is genuinely off (user's choice).
+function storageWriteMode(hasKey, encEnabled) {
+    if (hasKey) return 'encrypt';
+    if (encEnabled) return 'skip';
+    return 'plaintext';
+}
+
 async function writeState(data) {
+    const mode = storageWriteMode(!!cryptoKey, isEncEnabled());
+    if (mode === 'skip') {
+        if (!writeState._warned) {
+            writeState._warned = true;
+            console.warn('storage is locked — not persisting (refusing plaintext fallback)');
+            if (typeof toast === 'function') {
+                toast('Хранилище заблокировано: история не сохраняется без пароля', 'info');
+            }
+        }
+        return;
+    }
     const json = JSON.stringify(data);
-    if (cryptoKey) {
+    if (mode === 'encrypt') {
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(json));
         localStorage.setItem(STORAGE_KEY(), 'enc:' + b64(iv) + ':' + b64(ct));
