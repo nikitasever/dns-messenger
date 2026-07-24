@@ -64,7 +64,15 @@ class Identity:
         return x + e
 
     def save(self, path: str):
-        Path(path).write_bytes(self.private_bytes())
+        p = Path(path)
+        p.write_bytes(self.private_bytes())
+        # Это сырые приватные ключи (X25519 + Ed25519) без пароля — кто прочитает
+        # файл, тот получит личность целиком. Ограничиваем доступ владельцем.
+        # На Windows/иных ФС chmod может не сработать — там это просто no-op.
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
 
     @classmethod
     def load(cls, path: str) -> 'Identity':

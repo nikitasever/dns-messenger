@@ -10,6 +10,7 @@ echo
 echo "== JS syntax check (app.js) =="
 node -e "new Function(require('fs').readFileSync('static/app.js','utf8')); console.log('app.js: OK')"
 node -e "new Function(require('fs').readFileSync('static/sw.js','utf8')); console.log('sw.js: OK')"
+node -e "new Function(require('fs').readFileSync('static/csrf.js','utf8')); console.log('csrf.js: OK')"
 
 echo
 echo "== Python transport (nonce + EDNS0) tests =="
@@ -34,6 +35,10 @@ python tests/test_admin_auth.py
 echo
 echo "== Python profile-photo XSS regression test =="
 python tests/test_xss_photo.py
+
+echo
+echo "== Python CSRF protection test =="
+python tests/test_csrf.py
 
 echo
 echo "== Python Web Push tests =="

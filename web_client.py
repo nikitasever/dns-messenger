@@ -99,6 +99,43 @@ socketio = SocketIO(app, cors_allowed_origins='*', manage_session=False)
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# CSRF-защита (synchronizer token, привязанный к сессии)
+# ═══════════════════════════════════════════════════════════════════════
+# SameSite=Lax уже отсекает большинство cross-site POST, но это defense-in-depth:
+# каждой сессии выдаётся токен, он рендерится в <meta> на страницу, а клиентский
+# csrf.js добавляет его в заголовок X-CSRF-Token на всех мутирующих fetch'ах.
+# Сервер сверяет заголовок с токеном сессии и отклоняет несовпадения.
+CSRF_SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
+
+
+@app.before_request
+def _csrf_protect():
+    # Токен нужен любой сессии (даже до логина — форма входа тоже шлёт POST).
+    if 'csrf' not in session:
+        session['csrf'] = secrets.token_urlsafe(32)
+        session.permanent = False
+    if request.method in CSRF_SAFE_METHODS:
+        return
+    # Socket.IO — свой транспорт/handshake, same-origin, не навигируемая форма;
+    # мутаций стойкого состояния там нет (только сигналинг звонков/typing).
+    if request.path.startswith('/socket.io'):
+        return
+    # Под TESTING проверку выключаем (как Flask-WTF): существующие тесты шлют
+    # POST без токена. Отдельный tests/test_csrf.py гоняет её с TESTING=False.
+    if app.config.get('TESTING'):
+        return
+    token = request.headers.get('X-CSRF-Token', '')
+    if not (token and secrets.compare_digest(token, session.get('csrf', ''))):
+        return jsonify({'ok': False, 'error': 'CSRF token missing or invalid'}), 403
+
+
+@app.context_processor
+def _inject_csrf():
+    # Делает {{ csrf_token }} доступным во всех шаблонах для <meta>-тега.
+    return {'csrf_token': session.get('csrf', '')}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Пароли и хранение аккаунтов
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -125,6 +162,12 @@ def _load_json(path: Path) -> dict:
 
 def _save_json(path: Path, data: dict):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), 'utf-8')
+    # Здесь лежат хэши паролей аккаунтов и админа — не мировая читаемость.
+    # На Windows/иных ФС chmod может быть no-op, это не критично.
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def _hash_password(password: str, salt: str = '') -> tuple[str, str]:
@@ -877,8 +920,8 @@ def api_login():
     accounts = get_accounts()
 
     if mode == 'register':
-        if not password or len(password) < 4:
-            return jsonify({'ok': False, 'error': 'Password: minimum 4 characters'})
+        if not password or len(password) < 8:
+            return jsonify({'ok': False, 'error': 'Password: minimum 8 characters'})
         if username in accounts:
             return jsonify({'ok': False, 'error': 'Username already registered'})
         h, s = _hash_password(password)
@@ -1297,8 +1340,8 @@ def admin_change_password():
     if not is_admin_session():
         return jsonify({'ok': False, 'error': 'Not authorized'})
     new_pw = str(get_json_dict().get('password') or '')
-    if len(new_pw) < 6:
-        return jsonify({'ok': False, 'error': 'Minimum 6 characters'})
+    if len(new_pw) < 8:
+        return jsonify({'ok': False, 'error': 'Minimum 8 characters'})
     admin_data = _load_json(ADMIN_FILE)
     h, s = _hash_password(new_pw)
     new_sv = admin_data.get('sv', 0) + 1
@@ -1580,6 +1623,10 @@ def ensure_ssl_cert(cert_path: str = '.messenger_cert.pem', key_path: str = '.me
         Path(key_path).write_bytes(
             key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption())
         )
+        try:
+            os.chmod(key_path, 0o600)   # TLS-приватник — только владельцу
+        except OSError:
+            pass
         Path(cert_path).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
         print(f'[+] SSL certificate generated: {cert_path}')
         return cert_path, key_path

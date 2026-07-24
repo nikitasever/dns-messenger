@@ -2158,9 +2158,9 @@ function wireSettingsSection(id, root, overlay) {
                 toast('Шифрование отключено', 'success');
                 buildSettingsSection && renderSettingsData(root, overlay);
             } else {
-                const p1 = prompt('Придумайте пароль для шифрования переписки (мин. 4 символа):');
+                const p1 = prompt('Придумайте пароль для шифрования переписки (мин. 8 символов):');
                 if (p1 === null) return;
-                if (p1.length < 4) { toast('Слишком короткий пароль', 'error'); return; }
+                if (p1.length < 8) { toast('Слишком короткий пароль', 'error'); return; }
                 const p2 = prompt('Повторите пароль:');
                 if (p2 === null) return;
                 if (p1 !== p2) { toast('Пароли не совпадают', 'error'); return; }
@@ -3828,16 +3828,19 @@ function firstUrl(text) {
     const m = text.match(/https?:\/\/[^\s<]+[^\s<.,!?;:'")\]]/i);
     return m ? m[0] : null;
 }
-// Build a compact link-preview card (no external fetch — safe under CSP/DNS tunnel)
+// Build a compact link-preview card (no external fetch — safe under CSP/DNS tunnel).
+// The icon is generated locally (host initial on a color derived from the host),
+// so nothing is requested off-device — no domain leak, works during a shutdown.
 function linkPreviewHtml(url) {
     if (!url) return '';
     let host = '', path = '';
     try { const u = new URL(url); host = u.hostname.replace(/^www\./, ''); path = (u.pathname + u.search).slice(0, 60); }
     catch (e) { return ''; }
-    const favicon = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`;
+    const iconColors = avatarColor(host);
+    const iconLetter = host ? host[0].toUpperCase() : '#';
     return `
         <a class="link-preview" href="${esc(url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">
-            <img class="link-preview-icon" src="${esc(favicon)}" alt="" onerror="this.style.display='none'">
+            <div class="link-preview-icon" style="display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;color:#fff;background:linear-gradient(135deg,${iconColors[0]},${iconColors[1]})">${esc(iconLetter)}</div>
             <div class="link-preview-body">
                 <div class="link-preview-host">${esc(host)}</div>
                 <div class="link-preview-path">${esc(path || url)}</div>

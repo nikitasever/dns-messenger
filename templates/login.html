@@ -2,6 +2,8 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <script src="/static/csrf.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DNS Мессенджер</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
@@ -130,7 +132,7 @@
             <div class="input-group pw-field" id="pw-field">
                 <label id="t-pw-label">Пароль</label>
                 <input type="password" id="password" placeholder="Введите пароль" autocomplete="off">
-                <div class="input-hint" id="pw-hint">Минимум 4 символа</div>
+                <div class="input-hint" id="pw-hint">Минимум 8 символов</div>
             </div>
 
             <details class="server-toggle">
@@ -164,8 +166,8 @@
                 user_label: 'Имя пользователя', user_ph: 'Введите никнейм',
                 user_hint: 'Латинские буквы, цифры, подчёркивание. 2–20 символов.',
                 pw_label: 'Пароль', pw_ph: 'Введите пароль',
-                pw_hint_anon: 'Минимум 4 символа',
-                pw_hint_reg: 'Минимум 4 символа. Хранится защищённо на сервере.',
+                pw_hint_anon: 'Минимум 8 символов',
+                pw_hint_reg: 'Минимум 8 символов. Хранится защищённо на сервере.',
                 pw_hint_login: 'Введите ваш пароль',
                 server_summary: 'Настройки сервера',
                 server_ip_ph: 'IP сервера', server_port_ph: 'Порт',
@@ -184,8 +186,8 @@
                 user_label: 'Username', user_ph: 'Enter nickname',
                 user_hint: 'Latin letters, digits, underscore. 2–20 characters.',
                 pw_label: 'Password', pw_ph: 'Enter password',
-                pw_hint_anon: 'At least 4 characters',
-                pw_hint_reg: 'At least 4 characters. Stored securely on the server.',
+                pw_hint_anon: 'At least 8 characters',
+                pw_hint_reg: 'At least 8 characters. Stored securely on the server.',
                 pw_hint_login: 'Enter your password',
                 server_summary: 'Server settings',
                 server_ip_ph: 'Server IP', server_port_ph: 'Port',
