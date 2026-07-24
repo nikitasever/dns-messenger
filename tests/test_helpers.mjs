@@ -64,6 +64,23 @@ test('escHtml neutralizes tags before linkify (no injection)', () => {
     assert.ok(!out.includes('<script>'));
     assert.match(out, /&lt;script&gt;/);
 });
+// A security scan flagged the message `href` (linkify) as a possible XSS sink.
+// It's a false positive *only because* the real app calls linkify(esc(text)):
+// escaping runs first, so any " in a crafted URL is already &quot; before
+// URL_RE matches, and can't close href="...". URL_RE also requires https?://,
+// so no javascript:/data: scheme slips through. This test pins that invariant —
+// it fails if anyone ever reorders esc/linkify or loosens the scheme match.
+test('linkify cannot break out of href="" via a crafted URL (esc runs first)', () => {
+    const raw = 'click https://evil.com/x"onmouseover="alert(1) now';
+    const out = linkify(escAttr(raw));           // escAttr mirrors the real esc()
+    assert.ok(out.includes('&quot;'), 'the breakout quote was entity-encoded, not raw');
+    assert.ok(!out.includes('x"onmouseover'), 'no raw quote survived inside the href');
+    assert.ok(!/<a[^>]*\sonmouseover=/i.test(out), 'no live onmouseover attribute injected');
+});
+test('linkify never turns a javascript: URI into a link', () => {
+    const out = linkify(escAttr('run javascript:alert(1) please'));
+    assert.ok(!/<a\s/i.test(out), 'javascript: scheme is not linkified at all');
+});
 test('bodyOf strips a leading reply quote', () => {
     assert.equal(bodyOf({ text: '> alice: hi there\nreal body' }), 'real body');
 });
