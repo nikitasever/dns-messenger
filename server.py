@@ -26,6 +26,18 @@ from protocol import (
     CMD_LIST_USERS,
     b32encode, b32decode,
 )
+from crypto_utils import (
+    split_bundle, verify_sig, poll_signing_input, reg_signing_input,
+)
+
+# Бандл (X25519||Ed25519) и Ed25519-подпись — оба ровно 64 байта, значит их
+# base32 одинаковой длины. Подписанная регистрация шлёт bundle_b32 + sig_b32
+# без разделителя, а сервер режет строго по этой длине.
+BUNDLE_LEN = 64
+BUNDLE_B32_LEN = len(b32encode(bytes(BUNDLE_LEN)))
+# Окно защиты poll-запроса от повтора: подписанный nonce нельзя переиспользовать
+# в этом окне. Клиент шлёт свежий случайный nonce на каждый poll.
+POLL_NONCE_TTL = 300.0
 
 
 class RelayServer:
@@ -35,9 +47,13 @@ class RelayServer:
         self.port = port
         self.lock = threading.Lock()
 
-        # Пользователи
-        self.users: dict[str, bytes] = {}                    # user → pubkey
+        # Пользователи. Значение: {'bundle': bytes, 'pinned': bool}. pinned=True
+        # означает «имя закреплено за этим ключом» (после подписанной регистрации):
+        # сменить бандл или опросить ящик можно только с подписью этого ключа.
+        self.users: dict[str, dict] = {}
         self.mailbox: dict[str, list] = defaultdict(list)    # user → [msg, …]
+        # Виденные poll-nonce'ы для защиты от повтора: "user:nonce" → истечение.
+        self.seen_poll_nonces: dict[str, float] = {}
 
         # Сборка чанков сообщений
         self.msg_chunks: dict[str, dict[int, str]] = {}
@@ -63,20 +79,62 @@ class RelayServer:
     # ═══════════════════════════════════════════════════════════════════
 
     def _h_register(self, L: list[str]) -> str:
+        # r.<user>.<bundle_b32>[.<sig_b32>]  — sig доказывает владение бандлом.
         if len(L) < 2:
             return 'ERR:bad_reg'
         user = L[0]
-        pk = b32decode(''.join(L[1:]))
+        blob = ''.join(L[1:])
+        bundle_b32, sig_b32 = blob[:BUNDLE_B32_LEN], blob[BUNDLE_B32_LEN:]
+        try:
+            bundle = b32decode(bundle_b32)
+        except Exception:
+            return 'ERR:bad_reg'
+        # Длину бандла НЕ навязываем: старые клиенты слали только 32-байтный
+        # X25519-ключ. Такие остаются легаси-незакреплёнными (подписать нечем);
+        # закрепление возможно лишь для полного 64-байтного бандла с подписью.
+
+        # Подпись под бандлом (если прислана) проверяем Ed25519-ключом из САМОГО
+        # бандла — это доказывает, что регистрант владеет приватником бандла.
+        _x, ed_pub = split_bundle(bundle)
+        sig_ok = False
+        if sig_b32 and ed_pub:
+            try:
+                sig = b32decode(sig_b32)
+                sig_ok = len(sig) == 64 and verify_sig(
+                    ed_pub, reg_signing_input(user, bundle), sig)
+            except Exception:
+                sig_ok = False
+
         with self.lock:
-            self.users[user] = pk
-        print(f'[+] register: {user}')
+            entry = self.users.get(user)
+            if entry is None:
+                # Новое имя: подписанная регистрация сразу закрепляет его.
+                self.users[user] = {'bundle': bundle, 'pinned': sig_ok}
+            elif entry.get('pinned'):
+                # Закреплено: сменить может только владелец исходного ключа
+                # (подпись верна И бандл тот же — тот же verify-ключ).
+                if not (sig_ok and bundle == entry['bundle']):
+                    print(f'[!] register rejected (pinned): {user}')
+                    return 'ERR:pinned'
+                self.users[user] = {'bundle': bundle, 'pinned': True}
+            else:
+                # Легаси-имя (не закреплено). Апгрейд до pinned только если тот
+                # же владелец обновил клиент (подпись + бандл совпадает с
+                # сохранённым). Иначе — старое поведение last-write-wins, чтобы
+                # атакующий чужим ключом НЕ мог закрепить чужое легаси-имя.
+                if sig_ok and bundle == entry['bundle']:
+                    self.users[user] = {'bundle': bundle, 'pinned': True}
+                else:
+                    self.users[user] = {'bundle': bundle, 'pinned': False}
+        print(f'[+] register: {user}' + (' (pinned)' if self.users[user]['pinned'] else ''))
         return f'OK:{user}'
 
     def _h_getkey(self, L: list[str]) -> str:
         if not L:
             return 'ERR:no_user'
         with self.lock:
-            pk = self.users.get(L[0])
+            entry = self.users.get(L[0])
+        pk = entry['bundle'] if entry else None
         return f'KEY:{b32encode(pk)}' if pk else 'ERR:not_found'
 
     def _h_send(self, L: list[str]) -> str:
@@ -90,11 +148,51 @@ class RelayServer:
             self.msg_chunks, self.msg_meta, self.mailbox,
         )
 
+    def _accept_poll_nonce(self, user: str, nonce: str) -> bool:
+        """Отклоняет повтор подписанного poll в окне POLL_NONCE_TTL."""
+        key = f'{user}:{nonce}'
+        now = time.time()
+        with self.lock:
+            if len(self.seen_poll_nonces) > 10000:
+                self.seen_poll_nonces = {
+                    k: v for k, v in self.seen_poll_nonces.items() if v > now}
+            exp = self.seen_poll_nonces.get(key)
+            if exp and exp > now:
+                return False
+            self.seen_poll_nonces[key] = now + POLL_NONCE_TTL
+            return True
+
     def _h_poll(self, L: list[str]) -> str:
+        # p.<user>.0                         — легаси (без подписи)
+        # p.<user>.<nonce>.<sig_b32…>        — подписанный
         if not L:
             return 'ERR:no_user'
+        user = L[0]
         with self.lock:
-            msgs = self.mailbox.get(L[0])
+            entry = self.users.get(user)
+
+        # Разбор подписанного варианта: [user, nonce, sig-лейблы…].
+        signed_nonce, signed_sig = None, None
+        if len(L) >= 3:
+            try:
+                sig = b32decode(''.join(L[2:]))
+                if len(sig) == 64:
+                    signed_nonce, signed_sig = L[1], sig
+            except Exception:
+                pass
+
+        # Закреплённое имя обязано присылать корректную подпись; легаси (не
+        # закреплённое) продолжает опрашиваться без подписи (обратная совместимость).
+        if entry and entry.get('pinned'):
+            _x, ed_pub = split_bundle(entry['bundle'])
+            if not (signed_sig and ed_pub and verify_sig(
+                    ed_pub, poll_signing_input(user, signed_nonce), signed_sig)):
+                return 'ERR:auth'
+            if not self._accept_poll_nonce(user, signed_nonce):
+                return 'ERR:replay'
+
+        with self.lock:
+            msgs = self.mailbox.get(user)
             if not msgs:
                 return 'EMPTY'
             msg = msgs.pop(0)

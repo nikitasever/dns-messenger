@@ -37,12 +37,13 @@ from protocol import (
     CMD_FILE_HEADER, CMD_FILE_CHUNK, CMD_FILE_POLL, CMD_FILE_DOWNLOAD,
     CMD_LIST_USERS,
     MAX_LABEL_LEN, MAX_DOMAIN_LEN, NONCE_OVERHEAD,
-    b32encode, b32decode, chunk_string, gen_msg_id,
+    b32encode, b32decode, chunk_string, gen_msg_id, gen_nonce,
 )
 from crypto_utils import (
     Identity, encrypt, decrypt,
     generate_group_key, seal_group_key, unseal_group_key,
     split_bundle, build_signed, open_signed,
+    poll_signing_input, reg_signing_input,
 )
 
 app = Flask(__name__)
@@ -371,9 +372,16 @@ class UserMessenger:
         return res
 
     def register(self) -> bool:
-        pk = b32encode(self.identity.public_bundle())
-        # Идемпотентно (перезапись ключа) — можно повторять при потере пакета.
-        return self._q_reliable([CMD_REGISTER, self.username] + chunk_string(pk, MAX_LABEL_LEN)).startswith('OK')
+        # Подписываем регистрацию своим Ed25519-ключом: релей закрепляет имя за
+        # этим ключом (TOFR) и потом не даёт чужому переписать/опрашивать его.
+        # Формат нагрузки: bundle_b32 + sig_b32 (оба по 64 байта → режется по длине).
+        bundle = self.identity.public_bundle()
+        sig = self.identity.sign(reg_signing_input(self.username, bundle))
+        payload = b32encode(bundle) + b32encode(sig)
+        # Идемпотентно (тот же ключ) — можно повторять при потере пакета.
+        return self._q_reliable(
+            [CMD_REGISTER, self.username] + chunk_string(payload, MAX_LABEL_LEN)
+        ).startswith('OK')
 
     def _remember_peer(self, user: str, bundle: bytes) -> bytes | None:
         """Пиннит бандл пира по TOFU. Возвращает доверенный X25519 или None,
@@ -426,7 +434,12 @@ class UserMessenger:
     def poll_dm(self) -> list[dict]:
         msgs = []
         while True:
-            res = self._q([CMD_POLL, self.username, '0'])
+            # Подписываем каждый poll свежим nonce: релей проверяет подпись
+            # против нашего закреплённого ключа и не даёт чужому опустошить ящик.
+            nonce = gen_nonce()
+            sig = self.identity.sign(poll_signing_input(self.username, nonce))
+            res = self._q([CMD_POLL, self.username, nonce]
+                          + chunk_string(b32encode(sig), MAX_LABEL_LEN))
             if res == 'EMPTY' or res.startswith('ERR'):
                 break
             if res.startswith('MSG:'):

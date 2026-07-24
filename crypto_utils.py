@@ -115,6 +115,25 @@ def verify_sig(verify_pub: bytes, data: bytes, sig: bytes) -> bool:
         return False
 
 
+# ── Аутентификация запросов к релею (регистрация / poll) ─────────────
+# Релей — stateless DNS, «кто спрашивает» из транспорта не узнать. Клиент
+# подписывает запрос своим Ed25519-ключом, релей проверяет против verify-ключа
+# из зарегистрированного бандла. Отдельные контексты не дают переиспользовать
+# подпись регистрации как подпись poll и наоборот.
+POLL_SIG_CONTEXT = b'dnsmsg-poll-v1'
+REG_SIG_CONTEXT = b'dnsmsg-reg-v1'
+
+
+def poll_signing_input(user: str, nonce: str) -> bytes:
+    """Канонические байты, которые клиент подписывает для poll-запроса."""
+    return POLL_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + nonce.encode('ascii')
+
+
+def reg_signing_input(user: str, bundle: bytes) -> bytes:
+    """Канонические байты подписи регистрации: доказывает владение бандлом."""
+    return REG_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + bundle
+
+
 # ── Подписанная нагрузка ─────────────────────────────────────────────
 # Внутри шифротекста лежит: VERSION(1) || Ed25519-подпись(64) || plaintext.
 # Подпись покрывает context || plaintext, где context привязывает сообщение к

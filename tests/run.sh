@@ -25,6 +25,10 @@ echo "== Python group impersonation integration test =="
 python tests/test_group_auth.py
 
 echo
+echo "== Python relay auth (pinning + signed poll) test =="
+python tests/test_relay_auth.py
+
+echo
 echo "== Python delivery reliability (ACK retry) test =="
 python tests/test_reliability.py
 
