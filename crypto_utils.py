@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.serialization import (
     Encoding, NoEncryption, PrivateFormat, PublicFormat,
 )
@@ -31,6 +32,23 @@ from cryptography.hazmat.primitives.serialization import (
 # Длины «сырых» ключей X25519/Ed25519 — оба по 32 байта.
 KEY_LEN = 32
 SIG_LEN = 64
+
+# Заголовок зашифрованного identity-файла. Формат:
+#   IDENTITY_MAGIC || salt(16) || ChaCha20-Poly1305(nonce||ct||tag).
+# Зашифрован ключом, выведенным из пароля аккаунта через scrypt. Без magic —
+# «сырой» файл (аноним/легаси), читается как раньше.
+IDENTITY_MAGIC = b'IDENC1\n'
+_SCRYPT_N = 2 ** 14      # ~16 МБ памяти — заметно дороже для перебора пароля
+
+
+class IdentityLocked(Exception):
+    """identity-файл зашифрован, а верного пароля нет (не передан или неверен)."""
+
+
+def _derive_identity_key(password: str, salt: bytes) -> bytes:
+    """Пароль → 32-байтный ключ шифрования файла (scrypt, memory-hard)."""
+    return Scrypt(salt=salt, length=32, n=_SCRYPT_N, r=8, p=1).derive(
+        password.encode('utf-8'))
 
 
 class Identity:
@@ -63,29 +81,44 @@ class Identity:
         e = self.signing_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
         return x + e
 
-    def save(self, path: str):
+    def save(self, path: str, password: str | None = None):
+        """Сохранить личность. С паролем — шифруем файл (scrypt + ChaCha20),
+        без пароля — сырые байты (аноним/легаси). chmod 600 в любом случае."""
         p = Path(path)
-        p.write_bytes(self.private_bytes())
-        # Это сырые приватные ключи (X25519 + Ed25519) без пароля — кто прочитает
-        # файл, тот получит личность целиком. Ограничиваем доступ владельцем.
-        # На Windows/иных ФС chmod может не сработать — там это просто no-op.
+        raw = self.private_bytes()
+        if password:
+            salt = os.urandom(16)
+            blob = IDENTITY_MAGIC + salt + encrypt(raw, _derive_identity_key(password, salt))
+        else:
+            blob = raw
+        p.write_bytes(blob)
+        # Даже зашифрованный файл не делаем мирочитаемым: scrypt дорогой, но не
+        # бесконечный. На Windows/иных ФС chmod может быть no-op — не критично.
         try:
             os.chmod(p, 0o600)
         except OSError:
             pass
 
     @classmethod
-    def load(cls, path: str) -> 'Identity':
+    def load(cls, path: str, password: str | None = None) -> 'Identity':
         raw = Path(path).read_bytes()
+        if raw.startswith(IDENTITY_MAGIC):
+            if not password:
+                raise IdentityLocked('identity is encrypted; a password is required')
+            body = raw[len(IDENTITY_MAGIC):]
+            salt, ct = body[:16], body[16:]
+            try:
+                raw = decrypt(ct, _derive_identity_key(password, salt))
+            except Exception:
+                raise IdentityLocked('wrong password for the identity file')
         x_priv = X25519PrivateKey.from_private_bytes(raw[:KEY_LEN])
         if len(raw) >= 2 * KEY_LEN:
             ed_priv = Ed25519PrivateKey.from_private_bytes(raw[KEY_LEN:2 * KEY_LEN])
             return cls(x_priv, ed_priv)
-        # Старый файл только с X25519 — доращиваем Ed25519-ключом и апгрейдим
-        # файл на диске, чтобы подпись стала стабильной со следующего раза.
-        ident = cls(x_priv)
-        ident.save(path)
-        return ident
+        # Старый файл только с X25519 — доращиваем Ed25519-ключом. Персист (в т.ч.
+        # апгрейд формата и шифрование) делает вызывающий код, у которого есть
+        # контекст пароля (UserMessenger.__init__).
+        return cls(x_priv)
 
     def derive_shared_key(self, peer_public_bytes: bytes) -> bytes:
         """ECDH → HKDF-SHA256 → 32-байт ключ шифрования."""

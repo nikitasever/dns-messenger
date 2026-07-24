@@ -29,6 +29,10 @@ echo "== Python relay auth (pinning + signed poll) test =="
 python tests/test_relay_auth.py
 
 echo
+echo "== Python identity at-rest encryption test =="
+python tests/test_identity_enc.py
+
+echo
 echo "== Python delivery reliability (ACK retry) test =="
 python tests/test_reliability.py
 

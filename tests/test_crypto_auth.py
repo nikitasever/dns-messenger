@@ -113,9 +113,19 @@ def main():
                 Encoding.Raw, PrivateFormat.Raw, NoEncryption()))
         check('legacy key file starts at 32 bytes', os.path.getsize(legacy) == KEY_LEN)
         up = Identity.load(legacy)
-        check('legacy key is upgraded to 64 bytes on load', os.path.getsize(legacy) == 2 * KEY_LEN)
+        # load() is pure now: it does NOT rewrite the file (persistence is the
+        # caller's job, since encryption needs the password context). The upgrade
+        # to an Ed25519-carrying identity happens in memory.
+        check('load leaves the file untouched (still 32 bytes on disk)',
+              os.path.getsize(legacy) == KEY_LEN)
+        check('the loaded identity gained an Ed25519 key (64-byte bundle)',
+              len(up.public_bundle()) == 2 * KEY_LEN)
         check('upgraded identity keeps its original X25519 key',
               up.public_bytes() == ident.public_bytes())
+        # persisting it (no password → raw) writes the full 64-byte private key
+        up.save(legacy)
+        check('saving the upgraded identity persists 64 bytes',
+              os.path.getsize(legacy) == 2 * KEY_LEN)
 
     print(f"\n{passed} passed")
 

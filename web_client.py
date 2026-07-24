@@ -40,7 +40,7 @@ from protocol import (
     b32encode, b32decode, chunk_string, gen_msg_id, gen_nonce,
 )
 from crypto_utils import (
-    Identity, encrypt, decrypt,
+    Identity, IdentityLocked, IDENTITY_MAGIC, KEY_LEN, encrypt, decrypt,
     generate_group_key, seal_group_key, unseal_group_key,
     split_bundle, build_signed, open_signed,
     poll_signing_input, fpoll_signing_input, glist_signing_input,
@@ -327,7 +327,7 @@ def _is_transient_err(res: str) -> bool:
 
 
 class UserMessenger:
-    def __init__(self, username: str, transport):
+    def __init__(self, username: str, transport, password: str | None = None):
         self.username = username
         self.transport = transport
         self.running = False
@@ -336,9 +336,23 @@ class UserMessenger:
         data_dir = Path(f'.messenger_{username}')
         data_dir.mkdir(exist_ok=True)
         key_file = data_dir / 'identity.key'
-        self.identity = Identity.load(str(key_file)) if key_file.exists() else Identity()
-        if not key_file.exists():
-            self.identity.save(str(key_file))
+        # Личность зарегистрированного пользователя шифруется паролем аккаунта.
+        # Аноним пароля не имеет → сырой файл (chmod 600). Если файл зашифрован,
+        # а пароля нет (напр. авто-восстановление сессии после рестарта) — load
+        # бросит IdentityLocked, и вызывающий отправит пользователя на логин.
+        existing = key_file.read_bytes() if key_file.exists() else b''
+        if existing:
+            self.identity = Identity.load(str(key_file), password)
+        else:
+            self.identity = Identity()
+        was_encrypted = existing.startswith(IDENTITY_MAGIC)
+        plain_len = 0 if was_encrypted else len(existing)
+        # Пишем файл, если: он новый; легаси-файл только с X25519 (доращиваем
+        # Ed25519); или у нас есть пароль, а файл ещё не зашифрован (миграция).
+        if (not existing
+                or (not was_encrypted and plain_len < 2 * KEY_LEN)
+                or (password and not was_encrypted)):
+            self.identity.save(str(key_file), password)
 
         self.peer_keys: dict[str, bytes] = {}      # user → X25519 (для ECDH)
         self.peer_verify: dict[str, bytes] = {}    # user → Ed25519 (для подписи)
@@ -831,6 +845,12 @@ def _restore_messenger(username: str) -> UserMessenger | None:
             if not m.register():
                 return None
             users[username] = m
+        except IdentityLocked:
+            # Личность зашифрована паролем, а при авто-восстановлении его нет —
+            # это НАМЕРЕННО: сервер не может пользоваться ключом без пароля.
+            # Пусть пользователь войдёт заново (введёт пароль → расшифруем).
+            print(f'[i] {username}: encrypted identity — re-login required after restart')
+            return None
         except Exception as e:
             print(f'[!] Could not restore session for {username}: {e}')
             return None
@@ -980,14 +1000,20 @@ def api_login():
         if username in accounts:
             return jsonify({'ok': False, 'error': 'This username is registered. Enter password or choose another name.'})
 
+    # Пароль аккаунта шифрует identity-файл на диске (только для register/login;
+    # у анонима пароля нет). Ошибка расшифровки => неверный пароль к личности.
+    id_pw = password if mode in ('register', 'login') else None
+
     with users_lock:
         m = users.get(username)
         if not m:
             try:
-                m = UserMessenger(username, transport)
+                m = UserMessenger(username, transport, password=id_pw)
                 if not m.register():
                     return jsonify({'ok': False, 'error': 'Relay server unavailable'})
                 users[username] = m
+            except IdentityLocked:
+                return jsonify({'ok': False, 'error': 'Wrong password'})
             except Exception as e:
                 return jsonify({'ok': False, 'error': str(e)})
 
