@@ -101,4 +101,46 @@ test('esc (as escAttr) still round-trips plain text untouched by quoting', () =>
     assert.equal(escAttr('<b>hi</b>'), '&lt;b&gt;hi&lt;/b&gt;');
 });
 
+// Regression test for the reply-quote onclick JS-string-breakout XSS, proven
+// live with node's Function constructor (mirrors exactly how a browser
+// compiles an inline event-handler attribute into a function body): even
+// after esc()'s quote-encoding, `onclick="...scrollToQuoted('${esc(qName)}',this)"`
+// was still exploitable, because the browser decodes HTML entities in an
+// attribute value BEFORE that value is parsed as JS — so an escaped quote
+// still lands as a real quote at the JS-string layer and breaks out. Reachable
+// by any user just typing "> <payload>: text" as an ordinary message, no
+// special API or reply-feature abuse needed.
+//
+// The fix removes the inline onclick attribute entirely — qName/qText now
+// travel from renderMessages() to scrollToQuoted() as real JS values via a
+// closure-bound addEventListener, never serialized into an attribute that
+// gets parsed as code. This mirrors the current static/app.js template.
+function buildReplyQuoteHtml(qName, qText) {
+    return `<div class="reply-quote"><div class="reply-name">${escAttr(qName)}</div><div class="reply-text">${escAttr(qText)}</div></div>`;
+}
+test('reply-quote wrapper div carries no attributes at all beyond class, for any qName', () => {
+    // qName/qText are only ever interpolated into the two inner divs' TEXT
+    // CONTENT now, never into the wrapper's own tag — so its opening tag must
+    // be this exact literal string regardless of what qName contains. (A
+    // substring check for "onclick" anywhere in the HTML would false-positive
+    // on a name like 'x" onclick="alert(1)' rendered as inert escaped text —
+    // checking the actual tag boundary is what makes this precise.)
+    const attackerNames = [
+        "x',(alert(document.domain)),'",     // the exact payload confirmed to execute pre-fix
+        'x");alert(1);("',
+        'x" onclick="alert(1)',
+        '<img src=x onerror=alert(1)>',
+    ];
+    for (const name of attackerNames) {
+        const html = buildReplyQuoteHtml(name, 'hi');
+        assert.ok(html.startsWith('<div class="reply-quote">'),
+            `wrapper tag must carry no attributes for ${JSON.stringify(name)}: ${html}`);
+    }
+});
+test('a legitimate reply quote still renders name and text as visible content', () => {
+    const html = buildReplyQuoteHtml('alice', 'see you tomorrow');
+    assert.ok(html.includes('>alice<'));
+    assert.ok(html.includes('>see you tomorrow<'));
+});
+
 console.log(`\n${passed} passed`);

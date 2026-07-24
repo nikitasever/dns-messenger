@@ -769,8 +769,11 @@ function renderMessages() {
 
         const reactionsHtml = renderReactions(msg);
 
-        // Detect a leading reply quote of the form "> name: text\n..." and split it out
+        // Detect a leading reply quote of the form "> name: text\n..." and split it out.
+        // qName/qText come straight from the message's own (fully attacker-controlled)
+        // text — any user can type "> x: y" as their first line, no reply feature needed.
         let replyHtml = '';
+        let replyQName = '', replyQText = '';
         let bodyText = msg.text || '';
         if (bodyText.startsWith('> ')) {
             const nl = bodyText.indexOf('\n');
@@ -778,9 +781,16 @@ function renderMessages() {
                 const quoteLine = bodyText.slice(2, nl);
                 bodyText = bodyText.slice(nl + 1);
                 const colon = quoteLine.indexOf(':');
-                let qName = '', qText = quoteLine;
-                if (colon > 0) { qName = quoteLine.slice(0, colon); qText = quoteLine.slice(colon + 1).trim(); }
-                replyHtml = `<div class="reply-quote" onclick="event.stopPropagation();scrollToQuoted('${esc(qName)}',this)" data-qtext="${esc(qText)}"><div class="reply-name">${esc(qName)}</div><div class="reply-text">${esc(qText)}</div></div>`;
+                if (colon > 0) { replyQName = quoteLine.slice(0, colon); replyQText = quoteLine.slice(colon + 1).trim(); }
+                else { replyQText = quoteLine; }
+                // No onclick attribute: interpolating qName into an inline JS-string
+                // argument was exploitable even through esc() — the browser decodes
+                // HTML entities before the handler body is parsed as JS, so an escaped
+                // quote still lands as a real quote at the JS-string layer and breaks
+                // out (confirmed live: alert() fired via a hand-typed "> name: text").
+                // The click behavior is now wired below via addEventListener, passing
+                // replyQName/replyQText as real JS values — never serialized into code.
+                replyHtml = `<div class="reply-quote"><div class="reply-name">${esc(replyQName)}</div><div class="reply-text">${esc(replyQText)}</div></div>`;
             }
         }
         const editedHtml = msg.edited ? `<span class="msg-edited">${t('edited') || '\u0438\u0437\u043c\u0435\u043d\u0435\u043d\u043e'}</span>` : '';
@@ -873,6 +883,17 @@ function renderMessages() {
         }
 
         if (authWarn) { div.classList.add('msg-unverified'); div.insertAdjacentHTML('afterbegin', authWarn); }
+
+        // Reply-quote click: attached here (not inline onclick) so replyQName/
+        // replyQText travel as real JS values, never serialized into an attribute
+        // that gets parsed as code.
+        const quoteEl = div.querySelector('.reply-quote');
+        if (quoteEl) {
+            quoteEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                scrollToQuoted(replyQName, replyQText);
+            });
+        }
 
         // Context menu on right-click and long-press
         div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg); });
@@ -2659,9 +2680,11 @@ function startEdit(msg) {
     }
 }
 
-// Scroll to the quoted original message (best-effort match by sender + text)
-function scrollToQuoted(qName, quoteEl) {
-    const qText = quoteEl?.dataset?.qtext || '';
+// Scroll to the quoted original message (best-effort match by sender + text).
+// qText is now passed directly as a real JS value from the click listener in
+// renderMessages(), rather than round-tripped through a DOM attribute — see
+// the comment there for why that round-trip used to be exploitable.
+function scrollToQuoted(qName, qText) {
     const chat = state.currentChat && state.chats[state.currentChat.id];
     if (!chat) return;
     // Find the most recent matching message
