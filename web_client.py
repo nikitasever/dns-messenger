@@ -43,7 +43,8 @@ from crypto_utils import (
     Identity, encrypt, decrypt,
     generate_group_key, seal_group_key, unseal_group_key,
     split_bundle, build_signed, open_signed,
-    poll_signing_input, fpoll_signing_input, reg_signing_input,
+    poll_signing_input, fpoll_signing_input, glist_signing_input,
+    reg_signing_input,
 )
 
 app = Flask(__name__)
@@ -505,7 +506,11 @@ class UserMessenger:
         return msgs
 
     def fetch_groups(self):
-        res = self._q([CMD_GROUP_LIST, self.username])
+        # Подписываем запрос списка групп — чужой не перечислит наши членства.
+        nonce = gen_nonce()
+        sig = self.identity.sign(glist_signing_input(self.username, nonce))
+        res = self._q([CMD_GROUP_LIST, self.username, nonce]
+                      + chunk_string(b32encode(sig), MAX_LABEL_LEN))
         if not res.startswith('GROUPS:'):
             return
         for entry in res[7:].split('|'):
@@ -537,7 +542,10 @@ class UserMessenger:
         chunks = chunk_string(ct_b32, per_chunk) if ct_b32 else ['']
         total = len(chunks)
 
-        name_b32 = b32encode(filename.encode('utf-8'))
+        # Имя файла тоже E2E-шифруем тем же общим ключом — иначе релей видит
+        # открытым текстом, как называется файл (само по себе может быть
+        # чувствительным). Получатель расшифрует при опросе.
+        name_b32 = b32encode(encrypt(filename.encode('utf-8'), shared))
         if self._q_reliable([CMD_FILE_HEADER, to_user, self.username, fid, name_b32, str(len(ct)), str(total)]).startswith('ERR'):
             return {'ok': False, 'error': 'Header error'}
         for seq, chunk in enumerate(chunks):
@@ -560,12 +568,27 @@ class UserMessenger:
                 parts = res[5:].split(':', 3)
                 if len(parts) == 4:
                     fid, fr, name_b32, size = parts
-                    try:
-                        fname = b32decode(name_b32).decode('utf-8')
-                    except Exception:
-                        fname = 'unknown'
+                    fname = self._decrypt_filename(fr, name_b32)
                     files.append({'fid': fid, 'from': fr, 'name': fname, 'size': int(size)})
         return files
+
+    def _decrypt_filename(self, sender: str, name_b32: str) -> str:
+        """Расшифровать имя файла общим ключом с отправителем. Fallback на
+        открытый текст — для файлов от старых клиентов (до E2E-имён)."""
+        try:
+            raw = b32decode(name_b32)
+        except Exception:
+            return 'unknown'
+        pk = self.get_peer_key(sender)
+        if pk:
+            try:
+                return decrypt(raw, self.identity.derive_shared_key(pk)).decode('utf-8')
+            except Exception:
+                pass  # не расшифровалось — вероятно, легаси-плейнтекст
+        try:
+            return raw.decode('utf-8')
+        except Exception:
+            return 'unknown'
 
     def download_file(self, fid: str, sender: str) -> bytes | None:
         # Докачиваемое скачивание: каждый чанк тянется через _q_reliable (повтор

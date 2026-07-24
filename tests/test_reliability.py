@@ -117,6 +117,11 @@ def main():
         inbox = bob.poll_files()
         blobs = [f for f in inbox if f['name'] == 'blob.bin']
         check('file appears once in the inbox (no dup from retries)', len(blobs) == 1)
+        # The recipient recovered the real name, but the relay only ever held
+        # the E2E-encrypted form — it never sees the plaintext filename.
+        stored_name = protocol.b32decode(srv.files[blobs[0]['fid']]['name'])
+        check('the relay never sees the plaintext filename (E2E-encrypted)',
+              stored_name != b'blob.bin' and len(stored_name) > len(b'blob.bin'))
         # First download drops the first response of every chunk → resumable
         # retry. Second download reuses the same (fid, seq) queries, which the
         # transport has already "dropped once", so it runs clean with no retry.

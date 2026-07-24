@@ -136,6 +136,14 @@ def fpoll_signing_input(user: str, nonce: str) -> bytes:
     return FPOLL_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + nonce.encode('ascii')
 
 
+GLIST_SIG_CONTEXT = b'dnsmsg-glist-v1'
+
+
+def glist_signing_input(user: str, nonce: str) -> bytes:
+    """Подпись запроса списка групп: не даёт чужому перечислить членства user'а."""
+    return GLIST_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + nonce.encode('ascii')
+
+
 def reg_signing_input(user: str, bundle: bytes) -> bytes:
     """Канонические байты подписи регистрации: доказывает владение бандлом."""
     return REG_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + bundle

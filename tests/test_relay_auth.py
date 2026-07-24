@@ -22,7 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import RelayServer                                   # noqa: E402
 from crypto_utils import (                                        # noqa: E402
-    Identity, poll_signing_input, fpoll_signing_input, reg_signing_input,
+    Identity, poll_signing_input, fpoll_signing_input,
+    glist_signing_input, reg_signing_input,
 )
 from protocol import b32encode, chunk_string, MAX_LABEL_LEN, gen_nonce    # noqa: E402
 
@@ -56,6 +57,12 @@ def poll_L(user, ident, nonce=None):
 def fpoll_L(user, ident, nonce=None):
     nonce = nonce or gen_nonce()
     sig = ident.sign(fpoll_signing_input(user, nonce))
+    return [user, nonce] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
+
+
+def glist_L(user, ident, nonce=None):
+    nonce = nonce or gen_nonce()
+    sig = ident.sign(glist_signing_input(user, nonce))
     return [user, nonce] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
 
 
@@ -115,6 +122,18 @@ def main():
     r = srv._h_fpoll(fpoll_L('alice', alice))
     check('a valid signed file-poll delivers the file', r == 'FILE:fid1:bob:doc:10')
 
+    # ── group-list: a pinned user's memberships can't be enumerated ──────
+    srv.groups['grp1'] = {'creator': 'alice', 'members': {'alice'},
+                          'keys': {'alice': {'data': 'k', 'from_user': 'alice'}}}
+    check('an unsigned group-list on a pinned name is refused',
+          srv._h_glist(['alice']) == 'ERR:auth')
+    check('a group-list signed by the wrong key is refused',
+          srv._h_glist(glist_L('alice', mallory)) == 'ERR:auth')
+    check('a DM-poll signature cannot be replayed as a group-list',
+          srv._h_glist(poll_L('alice', alice)) == 'ERR:auth')
+    check('a valid signed group-list returns the memberships',
+          srv._h_glist(glist_L('alice', alice)).startswith('GROUPS:grp1:'))
+
     # ── legacy backward-compat ──────────────────────────────────────────
     carol = Identity()
     check('an unsigned (legacy) register succeeds', srv._h_register(reg_L('carol', carol, signed=False)).startswith('OK'))
@@ -124,6 +143,10 @@ def main():
     srv.files['fid2'] = {'from': 'z', 'name': 'f', 'size': '5', 'complete': True, 'to': 'carol'}
     srv.file_inbox['carol'] = ['fid2']
     check('a legacy name still file-polls unsigned', srv._h_fpoll(['carol']) == 'FILE:fid2:z:f:5')
+    srv.groups['grp2'] = {'creator': 'carol', 'members': {'carol'},
+                          'keys': {'carol': {'data': 'k', 'from_user': 'carol'}}}
+    check('a legacy name still lists groups unsigned',
+          srv._h_glist(['carol']).startswith('GROUPS:grp2:'))
 
     # same owner (persisted key) upgrades the legacy name to pinned
     check('the real owner upgrades a legacy name to pinned',

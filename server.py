@@ -28,7 +28,8 @@ from protocol import (
 )
 from crypto_utils import (
     split_bundle, verify_sig,
-    poll_signing_input, fpoll_signing_input, reg_signing_input,
+    poll_signing_input, fpoll_signing_input, glist_signing_input,
+    reg_signing_input,
 )
 
 # Бандл (X25519||Ed25519) и Ed25519-подпись — оба ровно 64 байта, значит их
@@ -289,10 +290,16 @@ class RelayServer:
         return f'GMSG:{msg["from"]}:{msg["data"]}'
 
     def _h_glist(self, L: list[str]) -> str:
-        # l.<user>
+        # l.<user>                           — легаси (без подписи)
+        # l.<user>.<nonce>.<sig_b32…>        — подписанный
         if not L:
             return 'ERR:no_user'
         user = L[0]
+        with self.lock:
+            entry = self.users.get(user)
+        err = self._authorize_poll(user, entry, L, glist_signing_input, 'glist')
+        if err:
+            return err
         with self.lock:
             result = []
             for gid, grp in self.groups.items():
