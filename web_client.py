@@ -18,6 +18,7 @@ import secrets
 import base64
 import io
 import ipaddress
+import re
 from pathlib import Path
 
 from flask import (
@@ -102,6 +103,13 @@ socketio = SocketIO(app, cors_allowed_origins='*', manage_session=False)
 # ═══════════════════════════════════════════════════════════════════════
 
 ACCOUNTS_FILE = Path('.messenger_accounts.json')
+# Only base64-encoded raster images — no room for a bare "," after the MIME
+# type (which is how the profile-photo XSS smuggled `" onerror="..."` past a
+# startswith('data:image/') check) and no SVG (which can carry <script>/event
+# handlers of its own even though <img> mostly neuters SVG script execution).
+PHOTO_DATA_URL_RE = re.compile(
+    r'^data:image/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/]+=*$')
+
 ADMIN_FILE = Path('.messenger_admin.json')
 BLOCKED_FILE = Path('.messenger_blocked.json')
 
@@ -1161,8 +1169,13 @@ def api_profile_photo_set():
     photo = get_json_dict().get('photo', '')
     if not isinstance(photo, str):
         return jsonify({'ok': False, 'error': 'Invalid image format'}), 400
-    # Validate: must be a data URL, max 100KB base64
-    if photo and not photo.startswith('data:image/'):
+    # startswith('data:image/') alone lets anything follow the prefix — e.g.
+    # `data:image/png,x" onerror="..."` — which the client used to interpolate
+    # unescaped into <img src="...">, a real stored XSS (proven live: a crafted
+    # photo fired script in a victim's browser via the chat/avatar view before
+    # this fix + the matching client-side esc() fix landed). Require the full
+    # base64 data-URL shape instead of a bare prefix check.
+    if photo and not PHOTO_DATA_URL_RE.match(photo):
         return jsonify({'ok': False, 'error': 'Invalid image format'})
     if len(photo) > 150_000:
         return jsonify({'ok': False, 'error': 'Image too large (max ~100KB)'})

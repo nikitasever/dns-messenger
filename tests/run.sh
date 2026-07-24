@@ -32,6 +32,10 @@ echo "== Python admin auth tests =="
 python tests/test_admin_auth.py
 
 echo
+echo "== Python profile-photo XSS regression test =="
+python tests/test_xss_photo.py
+
+echo
 echo "== Python Web Push tests =="
 python tests/test_webpush.py
 

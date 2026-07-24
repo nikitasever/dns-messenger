@@ -343,7 +343,7 @@ function avatarHtml(name, isGroup, size) {
     const initial = isGroup ? '#' : name[0].toUpperCase();
     const photo = !isGroup && profilePhotos[name];
     if (photo) {
-        return `<div class="avatar ${sz}" style="background:linear-gradient(135deg,${colors[0]},${colors[1]})"><img src="${photo}" class="avatar-img" alt=""></div>`;
+        return `<div class="avatar ${sz}" style="background:linear-gradient(135deg,${colors[0]},${colors[1]})"><img src="${esc(photo)}" class="avatar-img" alt=""></div>`;
     }
     return `<div class="avatar ${sz}" style="background:linear-gradient(135deg,${colors[0]},${colors[1]})">${initial}</div>`;
 }
@@ -3245,7 +3245,7 @@ function openDrawer() {
         $da.style.background = `linear-gradient(135deg,${colors[0]},${colors[1]})`;
         const photo = profilePhotos[state.username];
         if (photo) {
-            $da.innerHTML = `<img src="${photo}" class="avatar-img" alt="">`;
+            $da.innerHTML = `<img src="${esc(photo)}" class="avatar-img" alt="">`;
         } else {
             $da.textContent = state.username[0].toUpperCase();
         }
@@ -3783,7 +3783,12 @@ function esc(s) {
     if (!s) return '';
     const d = document.createElement('div');
     d.textContent = s;
-    return d.innerHTML;
+    // textContent -> innerHTML escapes &<> but NOT quotes (they're inert inside
+    // a text node, so the browser has no reason to encode them there). Every
+    // caller of esc() interpolates into a "-quoted HTML attribute, so an
+    // unescaped " lets the payload close the attribute early and add new ones
+    // (e.g. onerror=...) — this is exactly how the profile-photo XSS worked.
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // Turn plain URLs in already-escaped text into clickable links + collect them.

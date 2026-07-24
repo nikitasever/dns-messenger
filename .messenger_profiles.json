@@ -1,0 +1,5 @@
+{
+  "mallory": {
+    "photo": "data:image/png,x\" onerror=\"window.__xss_fired = (window.__xss_fired||0)+1; document.title='XSS-PWNED'\""
+  }
+}

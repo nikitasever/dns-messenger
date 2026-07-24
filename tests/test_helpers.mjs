@@ -12,6 +12,15 @@ function escHtml(s) {
     return String(s || '')
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+// Mirrors static/app.js's real esc(): a browser's textContent->innerHTML
+// round-trip auto-escapes &<> but not quotes, so esc() now explicitly encodes
+// them too — this is the fix for the profile-photo stored-XSS proven live
+// (a crafted `data:image/png,x" onerror="..."` fired in a real browser tab
+// before this landed). Kept as a separate mirror because the real esc() needs
+// a DOM (document.createElement), unavailable in plain Node.
+function escAttr(s) {
+    return escHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 function linkify(escapedText) {
     return escapedText.replace(URL_RE, (m) =>
         `<a href="${m}" class="msg-link" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">${m}</a>`);
@@ -70,6 +79,26 @@ test('edit command format round-trips', () => {
     const sep = rest.indexOf(':');
     assert.equal(rest.slice(0, sep), id);
     assert.equal(rest.slice(sep + 1), text);
+});
+
+// Regression test for the profile-photo stored XSS, proven live in a real
+// browser tab (document.title became "XSS-PWNED" via an <img onerror>) before
+// this fix. esc() is used everywhere a value is interpolated into a "-quoted
+// HTML attribute; escHtml() alone left the closing quote unescaped, letting
+// the payload break out of src="..." and add a live onerror attribute.
+test('esc (as escAttr) neutralizes the exact payload that fired live', () => {
+    const payload = 'data:image/png,x" onerror="window.__xss_fired=1;document.title=\'XSS-PWNED\'"';
+    const escaped = escAttr(payload);
+    // The invariant that actually matters: a double-quoted HTML attribute can
+    // only be terminated by a raw, unescaped ". If none survives, the browser
+    // has no way to end src="..." early — no other check is needed, since
+    // onerror can only become a live attribute by escaping that boundary.
+    assert.ok(!escaped.includes('"'), 'no raw double-quote survives — cannot close the attribute');
+    assert.ok(!escaped.includes("'"), 'no raw single-quote survives either (single-quoted attrs, JS strings)');
+});
+test('esc (as escAttr) still round-trips plain text untouched by quoting', () => {
+    assert.equal(escAttr('alice'), 'alice');
+    assert.equal(escAttr('<b>hi</b>'), '&lt;b&gt;hi&lt;/b&gt;');
 });
 
 console.log(`\n${passed} passed`);
