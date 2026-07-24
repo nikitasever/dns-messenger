@@ -21,7 +21,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import RelayServer                                   # noqa: E402
-from crypto_utils import Identity, poll_signing_input, reg_signing_input  # noqa: E402
+from crypto_utils import (                                        # noqa: E402
+    Identity, poll_signing_input, fpoll_signing_input, reg_signing_input,
+)
 from protocol import b32encode, chunk_string, MAX_LABEL_LEN, gen_nonce    # noqa: E402
 
 passed = 0
@@ -48,6 +50,12 @@ def reg_L(user, ident, signed=True):
 def poll_L(user, ident, nonce=None):
     nonce = nonce or gen_nonce()
     sig = ident.sign(poll_signing_input(user, nonce))
+    return [user, nonce] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
+
+
+def fpoll_L(user, ident, nonce=None):
+    nonce = nonce or gen_nonce()
+    sig = ident.sign(fpoll_signing_input(user, nonce))
     return [user, nonce] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
 
 
@@ -90,12 +98,32 @@ def main():
     check('replaying the same signed nonce is refused', srv._h_poll(labels) == 'ERR:replay')
     check('the message survives the replayed poll', len(srv.mailbox['alice']) == 1)
 
+    # ── file-inbox poll: same protection, distinct signing context ──────
+    srv.files['fid1'] = {'from': 'bob', 'name': 'doc', 'size': '10',
+                         'complete': True, 'to': 'alice'}
+    srv.file_inbox['alice'] = ['fid1']
+    check('an unsigned file-poll on a pinned inbox is refused',
+          srv._h_fpoll(['alice']) == 'ERR:auth')
+    check('the file is still queued after the refused poll',
+          srv.file_inbox['alice'] == ['fid1'])
+    check('a file-poll signed by the wrong key is refused',
+          srv._h_fpoll(fpoll_L('alice', mallory)) == 'ERR:auth')
+    # a DM-poll signature must NOT work as a file-poll (distinct context)
+    check('a DM-poll signature cannot be replayed as a file-poll',
+          srv._h_fpoll(poll_L('alice', alice)) == 'ERR:auth')
+    check('the file survives all refused polls', srv.file_inbox['alice'] == ['fid1'])
+    r = srv._h_fpoll(fpoll_L('alice', alice))
+    check('a valid signed file-poll delivers the file', r == 'FILE:fid1:bob:doc:10')
+
     # ── legacy backward-compat ──────────────────────────────────────────
     carol = Identity()
     check('an unsigned (legacy) register succeeds', srv._h_register(reg_L('carol', carol, signed=False)).startswith('OK'))
     check('a legacy name is NOT pinned', srv.users['carol']['pinned'] is False)
     srv.mailbox['carol'].append({'from': 'x', 'data': 'ct'})
     check('a legacy name still polls unsigned', srv._h_poll(['carol', '0']) == 'MSG:x:ct')
+    srv.files['fid2'] = {'from': 'z', 'name': 'f', 'size': '5', 'complete': True, 'to': 'carol'}
+    srv.file_inbox['carol'] = ['fid2']
+    check('a legacy name still file-polls unsigned', srv._h_fpoll(['carol']) == 'FILE:fid2:z:f:5')
 
     # same owner (persisted key) upgrades the legacy name to pinned
     check('the real owner upgrades a legacy name to pinned',

@@ -43,7 +43,7 @@ from crypto_utils import (
     Identity, encrypt, decrypt,
     generate_group_key, seal_group_key, unseal_group_key,
     split_bundle, build_signed, open_signed,
-    poll_signing_input, reg_signing_input,
+    poll_signing_input, fpoll_signing_input, reg_signing_input,
 )
 
 app = Flask(__name__)
@@ -548,7 +548,12 @@ class UserMessenger:
     def poll_files(self) -> list[dict]:
         files = []
         while True:
-            res = self._q([CMD_FILE_POLL, self.username])
+            # Подписываем опрос входящих файлов (свой контекст, отличный от DM),
+            # чтобы закреплённый file_inbox нельзя было опустошить чужому.
+            nonce = gen_nonce()
+            sig = self.identity.sign(fpoll_signing_input(self.username, nonce))
+            res = self._q([CMD_FILE_POLL, self.username, nonce]
+                          + chunk_string(b32encode(sig), MAX_LABEL_LEN))
             if res == 'EMPTY' or res.startswith('ERR'):
                 break
             if res.startswith('FILE:'):

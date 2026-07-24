@@ -121,12 +121,19 @@ def verify_sig(verify_pub: bytes, data: bytes, sig: bytes) -> bool:
 # из зарегистрированного бандла. Отдельные контексты не дают переиспользовать
 # подпись регистрации как подпись poll и наоборот.
 POLL_SIG_CONTEXT = b'dnsmsg-poll-v1'
+FPOLL_SIG_CONTEXT = b'dnsmsg-fpoll-v1'
 REG_SIG_CONTEXT = b'dnsmsg-reg-v1'
 
 
 def poll_signing_input(user: str, nonce: str) -> bytes:
-    """Канонические байты, которые клиент подписывает для poll-запроса."""
+    """Канонические байты, которые клиент подписывает для poll-запроса (DM)."""
     return POLL_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + nonce.encode('ascii')
+
+
+def fpoll_signing_input(user: str, nonce: str) -> bytes:
+    """То же для опроса входящих файлов. Отдельный контекст не даёт выдать
+    подпись DM-poll за подпись file-poll (и наоборот)."""
+    return FPOLL_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + nonce.encode('ascii')
 
 
 def reg_signing_input(user: str, bundle: bytes) -> bytes:

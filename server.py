@@ -27,7 +27,8 @@ from protocol import (
     b32encode, b32decode,
 )
 from crypto_utils import (
-    split_bundle, verify_sig, poll_signing_input, reg_signing_input,
+    split_bundle, verify_sig,
+    poll_signing_input, fpoll_signing_input, reg_signing_input,
 )
 
 # Бандл (X25519||Ed25519) и Ed25519-подпись — оба ровно 64 байта, значит их
@@ -148,9 +149,10 @@ class RelayServer:
             self.msg_chunks, self.msg_meta, self.mailbox,
         )
 
-    def _accept_poll_nonce(self, user: str, nonce: str) -> bool:
-        """Отклоняет повтор подписанного poll в окне POLL_NONCE_TTL."""
-        key = f'{user}:{nonce}'
+    def _accept_poll_nonce(self, scope: str, nonce: str) -> bool:
+        """Отклоняет повтор подписанного poll в окне POLL_NONCE_TTL. scope
+        разделяет пространства nonce разных типов опроса (dm/file)."""
+        key = f'{scope}:{nonce}'
         now = time.time()
         with self.lock:
             if len(self.seen_poll_nonces) > 10000:
@@ -162,16 +164,15 @@ class RelayServer:
             self.seen_poll_nonces[key] = now + POLL_NONCE_TTL
             return True
 
-    def _h_poll(self, L: list[str]) -> str:
-        # p.<user>.0                         — легаси (без подписи)
-        # p.<user>.<nonce>.<sig_b32…>        — подписанный
-        if not L:
-            return 'ERR:no_user'
-        user = L[0]
-        with self.lock:
-            entry = self.users.get(user)
+    def _authorize_poll(self, user, entry, L, signing_input_fn, kind):
+        """Для ЗАКРЕПЛЁННОГО имени требует валидную подпись над (user, nonce)
+        плюс свежий (неповторённый) nonce. Легаси-имя (не закреплено) проходит
+        без подписи. Возвращает строку-ошибку или None, если запрос авторизован.
 
-        # Разбор подписанного варианта: [user, nonce, sig-лейблы…].
+        Формат подписанного запроса: [user, nonce, sig_b32-лейблы…].
+        """
+        if not (entry and entry.get('pinned')):
+            return None
         signed_nonce, signed_sig = None, None
         if len(L) >= 3:
             try:
@@ -180,17 +181,25 @@ class RelayServer:
                     signed_nonce, signed_sig = L[1], sig
             except Exception:
                 pass
+        _x, ed_pub = split_bundle(entry['bundle'])
+        if not (signed_sig and ed_pub and verify_sig(
+                ed_pub, signing_input_fn(user, signed_nonce), signed_sig)):
+            return 'ERR:auth'
+        if not self._accept_poll_nonce(f'{kind}:{user}', signed_nonce):
+            return 'ERR:replay'
+        return None
 
-        # Закреплённое имя обязано присылать корректную подпись; легаси (не
-        # закреплённое) продолжает опрашиваться без подписи (обратная совместимость).
-        if entry and entry.get('pinned'):
-            _x, ed_pub = split_bundle(entry['bundle'])
-            if not (signed_sig and ed_pub and verify_sig(
-                    ed_pub, poll_signing_input(user, signed_nonce), signed_sig)):
-                return 'ERR:auth'
-            if not self._accept_poll_nonce(user, signed_nonce):
-                return 'ERR:replay'
-
+    def _h_poll(self, L: list[str]) -> str:
+        # p.<user>.0                         — легаси (без подписи)
+        # p.<user>.<nonce>.<sig_b32…>        — подписанный
+        if not L:
+            return 'ERR:no_user'
+        user = L[0]
+        with self.lock:
+            entry = self.users.get(user)
+        err = self._authorize_poll(user, entry, L, poll_signing_input, 'dm')
+        if err:
+            return err
         with self.lock:
             msgs = self.mailbox.get(user)
             if not msgs:
@@ -338,10 +347,16 @@ class RelayServer:
         return f'OK:chunk:{seq}'
 
     def _h_fpoll(self, L: list[str]) -> str:
-        # t.<user>
+        # t.<user>                           — легаси (без подписи)
+        # t.<user>.<nonce>.<sig_b32…>        — подписанный
         if not L:
             return 'ERR:no_user'
         user = L[0]
+        with self.lock:
+            entry = self.users.get(user)
+        err = self._authorize_poll(user, entry, L, fpoll_signing_input, 'file')
+        if err:
+            return err
         with self.lock:
             fids = self.file_inbox.get(user)
             if not fids:
