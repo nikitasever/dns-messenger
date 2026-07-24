@@ -89,6 +89,19 @@ def main():
     on_disk.pop(name, None)
     web_client._save_json(web_client.SV_FILE, on_disk)
 
+    # Rate-limit dict must not grow without bound: keys (client IPs) whose hits
+    # have all expired are swept, so an IP-rotating flood can't leak memory.
+    import time as _t
+    web_client._rate_limit_hits.clear()
+    stale_ts = _t.time() - 10_000        # far outside any window
+    for i in range(1000):
+        web_client._rate_limit_hits[f'login:10.0.0.{i}'] = [stale_ts]
+    web_client._rate_limit_last_sweep = 0.0            # force a sweep
+    web_client.rate_limited('login:1.2.3.4')          # triggers the sweep
+    check('stale rate-limit keys are swept (no unbounded growth)',
+          len(web_client._rate_limit_hits) <= 2)      # only the fresh probe key(s)
+    web_client._rate_limit_hits.clear()
+
     print(f"\n{passed} passed")
 
 

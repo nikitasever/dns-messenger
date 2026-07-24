@@ -281,12 +281,27 @@ def is_admin_session() -> bool:
 # ── Simple in-memory rate limiting ──────────────────────────────────────
 _rate_limit_lock = threading.Lock()
 _rate_limit_hits: dict[str, list[float]] = {}
+_rate_limit_last_sweep = 0.0
+_RATE_LIMIT_SWEEP_INTERVAL = 300.0
 
 
 def rate_limited(key: str, max_attempts: int = 5, window_seconds: float = 60.0) -> bool:
     """Return True if `key` has exceeded max_attempts within window_seconds."""
     now = time.time()
     with _rate_limit_lock:
+        # Ключ здесь — IP клиента. Списки внутри чистятся, но сами ключи иначе
+        # накапливались бы вечно: атакующий с ротацией IP (тривиально по IPv6)
+        # раздул бы словарь. Периодически выметаем ключи, у которых все отметки
+        # уже протухли.
+        global _rate_limit_last_sweep
+        if now - _rate_limit_last_sweep > _RATE_LIMIT_SWEEP_INTERVAL:
+            _rate_limit_last_sweep = now
+            for k in list(_rate_limit_hits):
+                fresh = [t for t in _rate_limit_hits[k] if now - t < window_seconds]
+                if fresh:
+                    _rate_limit_hits[k] = fresh
+                else:
+                    del _rate_limit_hits[k]
         hits = _rate_limit_hits.setdefault(key, [])
         hits[:] = [t for t in hits if now - t < window_seconds]
         if len(hits) >= max_attempts:
