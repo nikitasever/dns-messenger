@@ -41,6 +41,19 @@ BUNDLE_B32_LEN = len(b32encode(bytes(BUNDLE_LEN)))
 # в этом окне. Клиент шлёт свежий случайный nonce на каждый poll.
 POLL_NONCE_TTL = 300.0
 
+# Границы памяти релея. Хранилища наполняются НЕаутентифицированными
+# отправителями (послать сообщение/файл может кто угодно), поэтому без границ
+# флуд заголовками файлов (по 512 КБ) или незавершёнными чанками легко валит
+# релей по памяти. Кап на вставке даёт жёсткую границу; периодический сметатель
+# (_evict) добивает протухшее по TTL, даже если новых вставок нет.
+ASSEMBLY_TTL = 120.0        # незавершённая сборка чанков сообщения
+FILE_TTL = 3600.0           # файл — транзит; час на скачивание получателем
+MAILBOX_TTL = 86400.0       # непрочитанные сообщения — сутки
+MAX_MAILBOX_MSGS = 500      # очередь на одного получателя
+MAX_FILES = 500             # всего файлов в памяти релея
+MAX_INCOMPLETE = 1000       # одновременных незавершённых сборок (на стор)
+EVICT_INTERVAL = 30.0       # не чаще раза в 30 c проходим сметателем
+
 
 class RelayServer:
     def __init__(self, domain: str, bind: str = '0.0.0.0', port: int = 5353):
@@ -75,6 +88,9 @@ class RelayServer:
 
         # Идемпотентность повторов: mid уже доставленных сообщений
         self.delivered_mids: dict[str, float] = {}
+
+        # Троттлинг сметателя памяти.
+        self._last_evict = time.time()
 
     # ═══════════════════════════════════════════════════════════════════
     # Личные сообщения
@@ -323,10 +339,16 @@ class RelayServer:
         to_u, fr_u, fid = L[0], L[1], L[2]
         name_b32, size, total = L[3], int(L[4]), int(L[5])
         with self.lock:
+            # Кап числа файлов: заголовки шлёт кто угодно, а блоб до 512 КБ —
+            # без границы это прямой OOM. При переполнении выкидываем старейший.
+            if fid not in self.files and len(self.files) >= MAX_FILES:
+                oldest = min(self.files, key=lambda k: self.files[k].get('ts', 0))
+                self.files.pop(oldest, None)
             self.files[fid] = {
                 'name': name_b32, 'from': fr_u, 'to': to_u,
                 'size': size, 'total': total,
                 'chunks': {}, 'complete': False, 'data_b32': '',
+                'ts': time.time(),
             }
         print(f'[F] file header: {fid} {fr_u}->{to_u} ({size}B, {total} chunks)')
         return f'OK:{fid}'
@@ -421,6 +443,48 @@ class RelayServer:
             cutoff = sorted(self.delivered_mids.values())[2000]
             self.delivered_mids = {k: v for k, v in self.delivered_mids.items() if v >= cutoff}
 
+    def _evict(self):
+        """Периодически (не чаще EVICT_INTERVAL) выметает протухшее из хранилищ:
+        незавершённые сборки, старые файлы, устаревшие сообщения. Инлайновые капы
+        держат жёсткую границу и без этого; сметатель убирает то, что просто
+        протухло без новых вставок."""
+        now = time.time()
+        with self.lock:
+            if now - self._last_evict < EVICT_INTERVAL:
+                return
+            self._last_evict = now
+
+            # 1. Незавершённые сборки сообщений/групп — по TTL.
+            for chunks_store, meta_store in ((self.msg_chunks, self.msg_meta),
+                                             (self.gmsg_chunks, self.gmsg_meta)):
+                stale = [mid for mid, m in meta_store.items()
+                         if now - (m[3] if len(m) > 3 else 0) > ASSEMBLY_TTL]
+                for mid in stale:
+                    chunks_store.pop(mid, None)
+                    meta_store.pop(mid, None)
+
+            # 2. Файлы — по TTL (транзит, давно должны были скачать).
+            stale_f = [fid for fid, f in self.files.items()
+                       if now - f.get('ts', 0) > FILE_TTL]
+            for fid in stale_f:
+                self.files.pop(fid, None)
+            # Указатели в file_inbox на исчезнувшие файлы — вычищаем.
+            for user in list(self.file_inbox):
+                self.file_inbox[user] = [f for f in self.file_inbox[user] if f in self.files]
+                if not self.file_inbox[user]:
+                    del self.file_inbox[user]
+
+            # 3. Почтовые ящики — TTL на сообщения + кап длины.
+            for user in list(self.mailbox):
+                kept = [m for m in self.mailbox[user]
+                        if now - m.get('ts', now) < MAILBOX_TTL]
+                if len(kept) > MAX_MAILBOX_MSGS:
+                    kept = kept[-MAX_MAILBOX_MSGS:]
+                if kept:
+                    self.mailbox[user] = kept
+                else:
+                    del self.mailbox[user]
+
     def _assemble(self, mid, seq, total, data_b32, fr_u, dest,
                   chunks_store, meta_store, mail_store, is_group=False):
         """Собирает чанки сообщения и кладёт в почтовый ящик.
@@ -433,20 +497,30 @@ class RelayServer:
             if mid in self.delivered_mids:
                 return 'OK:delivered'
             if mid not in chunks_store:
+                # Кап на число одновременных незавершённых сборок: атакующий не
+                # может копить частичные чанки бесконечно — выкидываем старейшую.
+                if len(chunks_store) >= MAX_INCOMPLETE:
+                    oldest = min(meta_store, key=lambda m: meta_store[m][3])
+                    chunks_store.pop(oldest, None)
+                    meta_store.pop(oldest, None)
                 chunks_store[mid] = {}
-                meta_store[mid] = (dest, total, fr_u)
+                meta_store[mid] = (dest, total, fr_u, time.time())
             chunks_store[mid][seq] = data_b32
 
             if len(chunks_store[mid]) == total:
                 full = ''.join(chunks_store[mid][i] for i in range(total))
                 meta = meta_store[mid]
                 encrypted = b32decode(full)
-                mail_store[meta[0]].append({
+                box = mail_store[meta[0]]
+                box.append({
                     'from': meta[2],
                     'data': b32encode(encrypted),
                     'ts': int(time.time()),
                     'id': mid,
                 })
+                # Кап очереди получателя: держим свежие MAX_MAILBOX_MSGS.
+                if len(box) > MAX_MAILBOX_MSGS:
+                    del box[:len(box) - MAX_MAILBOX_MSGS]
                 del chunks_store[mid]
                 del meta_store[mid]
                 self._remember_delivered(mid)
@@ -477,6 +551,7 @@ class RelayServer:
     }
 
     def handle_query(self, raw: bytes) -> bytes:
+        self._evict()          # троттлится внутри — дёшево звать на каждый запрос
         request = DNSRecord.parse(raw)
         qname = str(request.q.qname).rstrip('.')
 

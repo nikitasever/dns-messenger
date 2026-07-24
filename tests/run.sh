@@ -33,6 +33,10 @@ echo "== Python identity at-rest encryption test =="
 python tests/test_identity_enc.py
 
 echo
+echo "== Python relay memory-bounds (DoS) test =="
+python tests/test_relay_dos.py
+
+echo
 echo "== Python delivery reliability (ACK retry) test =="
 python tests/test_reliability.py
 
