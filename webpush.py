@@ -183,6 +183,23 @@ class PushGone(Exception):
     """Подписка мертва (404/410) — вызывающий код должен её удалить."""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Не следовать за редиректами при отправке push.
+
+    is_safe_push_endpoint проверяет ТОЛЬКО исходный endpoint. urllib с дефолтным
+    opener'ом молча идёт по 3xx-редиректу без повторной проверки, поэтому
+    вредоносный push-сервер (прошедший проверку как публичный HTTPS) мог ответить
+    `302 Location: http://169.254.169.254/…` и увести запрос на внутренний адрес —
+    SSRF в обход заслона. Push-endpoint'ы по RFC 8030 — прямые POST-цели и не
+    должны редиректить, поэтому просто отказываемся следовать.
+    """
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_push_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def send_push(subscription: dict, payload: bytes, keys: dict,
               sub: str = 'mailto:admin@localhost', ttl: int = DEFAULT_TTL,
               timeout: float = 10.0) -> int:
@@ -206,7 +223,9 @@ def send_push(subscription: dict, payload: bytes, keys: dict,
     req.add_header('Authorization', _vapid_auth_header(endpoint, keys, sub))
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # Свой opener без следования редиректам (см. _NoRedirect): закрывает
+        # SSRF через 3xx-увод на внутренний адрес после прохождения заслона.
+        with _push_opener.open(req, timeout=timeout) as resp:
             return resp.status
     except urllib.error.HTTPError as e:
         if e.code in (404, 410):

@@ -158,6 +158,62 @@ def main():
                'keys': {'p256dh': keys['public'], 'auth': webpush.b64u_encode(os.urandom(16))}},
               b'{}', keys), webpush.UnsafeEndpoint))
 
+    # ── SSRF via redirect must NOT be followed (scan finding) ───────────
+    # is_safe_push_endpoint only vets the initial URL; a malicious push server
+    # that passes the guard must not be able to 302 us onto an internal address.
+    import http.server
+    import threading
+
+    internal_hits = []
+
+    class Internal(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            internal_hits.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    class Malicious(http.server.BaseHTTPRequestHandler):
+        redirect_to = ''
+
+        def do_POST(self):
+            self.send_response(302)
+            self.send_header('Location', self.redirect_to)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    internal = http.server.HTTPServer(('127.0.0.1', 0), Internal)
+    threading.Thread(target=internal.serve_forever, daemon=True).start()
+    Malicious.redirect_to = f'http://127.0.0.1:{internal.server_address[1]}/pwned'
+    evil = http.server.HTTPServer(('127.0.0.1', 0), Malicious)
+    threading.Thread(target=evil.serve_forever, daemon=True).start()
+
+    ua = ec.generate_private_key(ec.SECP256R1())
+    p256dh = ua.public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    sub = {'endpoint': f'http://127.0.0.1:{evil.server_address[1]}/hook',
+           'keys': {'p256dh': webpush.b64u_encode(p256dh),
+                    'auth': webpush.b64u_encode(os.urandom(16))}}
+    vk = webpush.generate_vapid()
+    # Bypass the endpoint guard (the point of the test is redirect-following, not
+    # the initial-URL check, which is covered above) and confirm the redirect to
+    # the internal sink is refused.
+    orig_guard = webpush.is_safe_push_endpoint
+    webpush.is_safe_push_endpoint = lambda url: True
+    try:
+        try:
+            webpush.send_push(sub, b'{}', vk, timeout=5.0)
+        except Exception:
+            pass  # a 3xx/te error is fine; what matters is the sink was not hit
+    finally:
+        webpush.is_safe_push_endpoint = orig_guard
+    check('a push endpoint redirect is NOT followed to an internal address',
+          internal_hits == [])
+
     print(f"\n{passed} passed")
 
 
