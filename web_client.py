@@ -440,9 +440,17 @@ class UserMessenger:
     def get_peer_key(self, user: str) -> bytes | None:
         if user in self.peer_keys:
             return self.peer_keys[user]
-        res = self._q_reliable([CMD_GETKEY, user])   # чтение, повтор безопасен
+        res = self._q_reliable([CMD_GETKEY, user])   # чтение, повтор безопасно
         if res.startswith('KEY:'):
-            return self._remember_peer(user, b32decode(res[4:]))
+            try:
+                bundle = b32decode(res[4:])
+            except Exception:
+                return None                      # битый base32 от релея — не падаем
+            # Принимаем только валидные длины бандла: 32 (легаси X25519) или 64
+            # (X25519+Ed25519). Отбрасывает мусор и странные усечения.
+            if len(bundle) not in (KEY_LEN, 2 * KEY_LEN):
+                return None
+            return self._remember_peer(user, bundle)
         return None
 
     def peer_verify_key(self, user: str) -> bytes | None:

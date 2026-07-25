@@ -72,10 +72,20 @@ class DoHTransport(BaseTransport):
         'yandex':     'https://common.dot.dns.yandex.net/dns-query',
     }
 
+    # DoH-ответ — считанные КБ; больше — вредоносный/битый резолвер, режем.
+    MAX_DOH_RESPONSE = 65536
+
     def __init__(self, domain: str, provider: str = 'google'):
         self.domain = domain
-        self.url = self.SERVERS.get(provider, provider)
-        # Разрешаем все сертификаты для отладки (в проде — убрать)
+        url = self.SERVERS.get(provider, provider)
+        # Кастомный provider (не из белого списка) обязан быть https — иначе
+        # urllib сходил бы по file://, http:// на внутренний адрес и т.п. (SSRF).
+        if url not in self.SERVERS.values() and not url.startswith('https://'):
+            raise ValueError(
+                f'DoH provider must be a known key or an https:// URL, got {provider!r}')
+        self.url = url
+        # create_default_context() проверяет цепочку и имя хоста — сертификаты
+        # НЕ принимаются вслепую (прежний комментарий про «отладку» был неверен).
         self._ctx = ssl.create_default_context()
 
     def query(self, labels: list[str]) -> str:
@@ -91,7 +101,11 @@ class DoHTransport(BaseTransport):
         )
         try:
             with urllib.request.urlopen(req, timeout=10, context=self._ctx) as resp:
-                data = resp.read()
+                # Резолвер untrusted: читаем не больше лимита, иначе он мог бы
+                # отдать гигабайтное тело и выесть память клиента.
+                data = resp.read(self.MAX_DOH_RESPONSE + 1)
+            if len(data) > self.MAX_DOH_RESPONSE:
+                return 'ERR:doh_response_too_large'
             dns_resp = DNSRecord.parse(data)
             for rr in dns_resp.rr:
                 if rr.rtype == QTYPE.TXT:
