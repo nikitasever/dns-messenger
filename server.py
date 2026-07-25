@@ -53,6 +53,14 @@ MAX_MAILBOX_MSGS = 500      # очередь на одного получате�
 MAX_FILES = 500             # всего файлов в памяти релея
 MAX_INCOMPLETE = 1000       # одновременных незавершённых сборок (на стор)
 EVICT_INTERVAL = 30.0       # не чаще раза в 30 c проходим сметателем
+# Границы РАЗМЕРА одной записи (не только числа записей): total из заголовка
+# контролирует атакующий, поэтому число чанков на файл/сообщение тоже надо
+# ограничить, иначе один «файл» с гигантским total выест память.
+MAX_MSG_CHUNKS = 1000       # чанков на одно сообщение (сообщения мелкие)
+MAX_FILE_CHUNKS = 8000      # чанков на файл (512 КБ файла с запасом)
+MAX_GROUPS = 5000           # групп в памяти релея
+MAX_USERS = 50000           # зарегистрированных имён
+STORE_TTL = 86400.0         # простаивающие группы/имена без активности — сутки
 
 
 class RelayServer:
@@ -123,27 +131,34 @@ class RelayServer:
             except Exception:
                 sig_ok = False
 
+        now = time.time()
         with self.lock:
             entry = self.users.get(user)
             if entry is None:
-                # Новое имя: подписанная регистрация сразу закрепляет его.
-                self.users[user] = {'bundle': bundle, 'pinned': sig_ok}
+                # Новое имя. Регистрация неаутентифицированна → ограничиваем
+                # число имён: при переполнении вымываем старейшее НЕзакреплённое
+                # (закреплённые — реальные аккаунты, их не трогаем); если таких
+                # нет — отклоняем.
+                if len(self.users) >= MAX_USERS:
+                    legacy = [u for u, e in self.users.items() if not e.get('pinned')]
+                    if not legacy:
+                        return 'ERR:full'
+                    self.users.pop(min(legacy, key=lambda u: self.users[u].get('ts', 0)), None)
+                self.users[user] = {'bundle': bundle, 'pinned': sig_ok, 'ts': now}
             elif entry.get('pinned'):
                 # Закреплено: сменить может только владелец исходного ключа
                 # (подпись верна И бандл тот же — тот же verify-ключ).
                 if not (sig_ok and bundle == entry['bundle']):
                     print(f'[!] register rejected (pinned): {user}')
                     return 'ERR:pinned'
-                self.users[user] = {'bundle': bundle, 'pinned': True}
+                self.users[user] = {'bundle': bundle, 'pinned': True, 'ts': now}
             else:
                 # Легаси-имя (не закреплено). Апгрейд до pinned только если тот
                 # же владелец обновил клиент (подпись + бандл совпадает с
                 # сохранённым). Иначе — старое поведение last-write-wins, чтобы
                 # атакующий чужим ключом НЕ мог закрепить чужое легаси-имя.
-                if sig_ok and bundle == entry['bundle']:
-                    self.users[user] = {'bundle': bundle, 'pinned': True}
-                else:
-                    self.users[user] = {'bundle': bundle, 'pinned': False}
+                pinned = bool(sig_ok and bundle == entry['bundle'])
+                self.users[user] = {'bundle': bundle, 'pinned': pinned, 'ts': now}
         print(f'[+] register: {user}' + (' (pinned)' if self.users[user]['pinned'] else ''))
         return f'OK:{user}'
 
@@ -236,10 +251,18 @@ class RelayServer:
         with self.lock:
             if gid in self.groups:
                 return 'ERR:exists'
+            # Создание группы неаутентифицированно — ограничиваем число групп,
+            # иначе флуд `c.<rand>.x` копит записи вечно (OOM). Выкидываем
+            # старейшую по активности.
+            if len(self.groups) >= MAX_GROUPS:
+                oldest = min(self.groups, key=lambda g: self.groups[g].get('ts', 0))
+                self.groups.pop(oldest, None)
+                self.group_mail.pop(oldest, None)
             self.groups[gid] = {
                 'creator': creator,
                 'members': {creator},
                 'keys': {},
+                'ts': time.time(),
             }
         print(f'[G+] group created: {gid} by {creator}')
         return f'OK:{gid}'
@@ -338,11 +361,20 @@ class RelayServer:
             return 'ERR:bad_fheader'
         to_u, fr_u, fid = L[0], L[1], L[2]
         name_b32, size, total = L[3], int(L[4]), int(L[5])
+        # total контролирует атакующий — ограничиваем число чанков на файл.
+        if total < 1 or total > MAX_FILE_CHUNKS:
+            return 'ERR:bad_total'
         with self.lock:
-            # Кап числа файлов: заголовки шлёт кто угодно, а блоб до 512 КБ —
-            # без границы это прямой OOM. При переполнении выкидываем старейший.
+            # Кап числа файлов. При переполнении НЕ вымываем файл, ждущий выдачи
+            # (есть указатель в file_inbox) — иначе флуд заголовками удалял бы
+            # чужой недоставленный файл. Выкидываем старейший БЕЗ ожидания;
+            # если таких нет — отклоняем новый заголовок.
             if fid not in self.files and len(self.files) >= MAX_FILES:
-                oldest = min(self.files, key=lambda k: self.files[k].get('ts', 0))
+                pending = {f for fids in self.file_inbox.values() for f in fids}
+                evictable = [k for k in self.files if k not in pending]
+                if not evictable:
+                    return 'ERR:full'
+                oldest = min(evictable, key=lambda k: self.files[k].get('ts', 0))
                 self.files.pop(oldest, None)
             self.files[fid] = {
                 'name': name_b32, 'from': fr_u, 'to': to_u,
@@ -365,6 +397,10 @@ class RelayServer:
                 return 'ERR:no_file'
             if finfo['complete']:
                 return 'OK:complete'      # повтор после сборки — идемпотентно
+            # seq вне [0, total) отклоняем: иначе флуд разными seq раздувает
+            # chunks сверх заявленного total (память).
+            if seq < 0 or seq >= finfo['total']:
+                return 'ERR:bad_seq'
             finfo['chunks'][seq] = data
             if len(finfo['chunks']) == finfo['total']:
                 finfo['data_b32'] = ''.join(finfo['chunks'][i] for i in range(finfo['total']))
@@ -493,18 +529,28 @@ class RelayServer:
         дедупликации повтор последнего чанка одночанкового сообщения породил бы
         дубликат в ящике. Уже доставленный mid просто повторно квитируется.
         """
+        # total контролирует отправитель — ограничиваем число чанков и seq.
+        if total < 1 or total > MAX_MSG_CHUNKS or seq < 0 or seq >= total:
+            return 'ERR:bad_chunk'
+        # Идемпотентность и защита от инъекции — по (отправитель, mid), а не по
+        # одному mid: чужой отправитель не может пометить mid доставленным
+        # (pre-delivery drop) или влезть в чужую сборку.
+        dkey = f'{fr_u}:{mid}'
         with self.lock:
-            if mid in self.delivered_mids:
+            if dkey in self.delivered_mids:
                 return 'OK:delivered'
-            if mid not in chunks_store:
-                # Кап на число одновременных незавершённых сборок: атакующий не
-                # может копить частичные чанки бесконечно — выкидываем старейшую.
+            existing = meta_store.get(mid)
+            if existing is None:
                 if len(chunks_store) >= MAX_INCOMPLETE:
                     oldest = min(meta_store, key=lambda m: meta_store[m][3])
                     chunks_store.pop(oldest, None)
                     meta_store.pop(oldest, None)
                 chunks_store[mid] = {}
                 meta_store[mid] = (dest, total, fr_u, time.time())
+            elif (existing[0], existing[1], existing[2]) != (dest, total, fr_u):
+                # Тот же mid, но другой отправитель/адрес/total — попытка
+                # инъекции чанка в чужую сборку. Не смешиваем.
+                return 'ERR:mid_conflict'
             chunks_store[mid][seq] = data_b32
 
             if len(chunks_store[mid]) == total:
@@ -523,7 +569,7 @@ class RelayServer:
                     del box[:len(box) - MAX_MAILBOX_MSGS]
                 del chunks_store[mid]
                 del meta_store[mid]
-                self._remember_delivered(mid)
+                self._remember_delivered(dkey)
                 tag = 'G' if is_group else '>'
                 print(f'[{tag}] {fr_u} -> {dest} ({len(encrypted)}B)')
                 return 'OK:delivered'

@@ -77,6 +77,39 @@ def main():
     check('the TTL sweep drops a stale incomplete assembly',
           'stalemid' not in srv2.msg_chunks and 'stalemid' not in srv2.msg_meta)
 
+    # ── per-ENTRY size caps (not just entry count) ──────────────────────
+    check('file header with oversized total is rejected',
+          srv._h_fheader(['u', 'a', 'bigfid', 'nn', '1', str(server.MAX_FILE_CHUNKS + 1)]) == 'ERR:bad_total')
+    srv._h_fheader(['u', 'a', 'okfid', 'nn', '10', '2'])       # total=2
+    check('a file chunk with seq >= total is rejected',
+          srv._h_fchunk(['okfid', '5', 'data']) == 'ERR:bad_seq')
+    check('a message with oversized total is rejected',
+          srv._h_send(['b', 'a', 'mm', '0', str(server.MAX_MSG_CHUNKS + 1), b32encode(b'x')]) == 'ERR:bad_chunk')
+    check('a message chunk with seq >= total is rejected',
+          srv._h_send(['b', 'a', 'mm2', '5', '2', b32encode(b'x')]) == 'ERR:bad_chunk')
+
+    # ── reassembly source binding + per-sender idempotency ──────────────
+    srv._h_send(['bob', 'alice', 'shared', '0', '2', b32encode(b'aa')])
+    check('a chunk for the same mid from a different sender is rejected',
+          srv._h_send(['bob', 'mallory', 'shared', '1', '2', b32encode(b'bb')]) == 'ERR:mid_conflict')
+    srv._h_send(['carol', 'mallory', 'dup', '0', '1', b32encode(b'x')])   # mallory completes 'dup'
+    check("a real sender's message reusing another sender's mid still delivers",
+          srv._h_send(['carol', 'alice', 'dup', '0', '1', b32encode(b'yy')]) == 'OK:delivered')
+
+    # ── groups / users stores are bounded ───────────────────────────────
+    from crypto_utils import Identity                                 # noqa: E402
+    from protocol import chunk_string as _cs, MAX_LABEL_LEN as _ml    # noqa: E402
+    server.MAX_GROUPS = 10
+    for i in range(server.MAX_GROUPS + 20):
+        srv._h_gcreate([f'grp{i}', 'att'])
+    check('the groups store is bounded under a creation flood',
+          len(srv.groups) <= server.MAX_GROUPS)
+    server.MAX_USERS = 10
+    for i in range(server.MAX_USERS + 20):
+        srv._h_register([f'usr{i}'] + _cs(b32encode(Identity().public_bundle()), _ml))
+    check('the users store is bounded under a registration flood',
+          len(srv.users) <= server.MAX_USERS)
+
     print(f"\n{passed} passed")
 
 
