@@ -102,6 +102,19 @@ def main():
           len(web_client._rate_limit_hits) <= 2)      # only the fresh probe key(s)
     web_client._rate_limit_hits.clear()
 
+    # Per-account login throttle: after ACCOUNT_FAIL_MAX failures a specific
+    # username is temporarily blocked (defeats IP-rotation brute-force that the
+    # per-IP limit misses).
+    web_client._login_failures.clear()
+    name = '__throttle_test__'
+    check('account is not throttled initially', not web_client.account_throttled(name))
+    for _ in range(web_client.ACCOUNT_FAIL_MAX):
+        web_client.note_login_failure(name)
+    check('account is throttled after too many failures',
+          web_client.account_throttled(name))
+    check('a different account is unaffected', not web_client.account_throttled('someone_else'))
+    web_client._login_failures.clear()
+
     print(f"\n{passed} passed")
 
 

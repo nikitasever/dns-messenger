@@ -315,6 +315,31 @@ def rate_limited(key: str, max_attempts: int = 5, window_seconds: float = 60.0) 
         return False
 
 
+# Per-ACCOUNT login-failure throttle. The per-IP limit is defeated by IP
+# rotation (IPv6/proxy pool), so a named account also needs its own counter.
+# Keyed by username; only real (registered) accounts are ever recorded (login
+# rejects unknown names first), so this dict is bounded by the user count.
+_login_failures: dict[str, list[float]] = {}
+ACCOUNT_FAIL_WINDOW = 900.0     # 15 минут
+ACCOUNT_FAIL_MAX = 20           # неудач за окно, потом временно блокируем
+
+
+def account_throttled(username: str) -> bool:
+    now = time.time()
+    with _rate_limit_lock:
+        hits = [t for t in _login_failures.get(username, []) if now - t < ACCOUNT_FAIL_WINDOW]
+        _login_failures[username] = hits
+        return len(hits) >= ACCOUNT_FAIL_MAX
+
+
+def note_login_failure(username: str):
+    now = time.time()
+    with _rate_limit_lock:
+        hits = [t for t in _login_failures.get(username, []) if now - t < ACCOUNT_FAIL_WINDOW]
+        hits.append(now)
+        _login_failures[username] = hits
+
+
 def client_ip() -> str:
     return request.remote_addr or 'unknown'
 
@@ -1026,8 +1051,13 @@ def api_login():
     elif mode == 'login':
         if username not in accounts:
             return jsonify({'ok': False, 'error': 'Account not found. Register first.'})
+        # Пер-аккаунтный троттлинг: закрывает брутфорс с ротацией IP, который
+        # обходит пер-IP лимит.
+        if account_throttled(username):
+            return jsonify({'ok': False, 'error': 'Too many failed attempts. Try again later.'}), 429
         acc = accounts[username]
         if not _verify_password(password, acc['hash'], acc['salt']):
+            note_login_failure(username)
             return jsonify({'ok': False, 'error': 'Wrong password'})
 
     else:  # anonymous
