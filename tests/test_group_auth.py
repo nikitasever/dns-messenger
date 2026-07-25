@@ -112,6 +112,20 @@ def main():
         check('genuine vs forged are distinguishable',
               genuine[0]['auth'] == 'verified' and forged[0]['auth'] == 'forged')
 
+        # ── mallory forges as alice WITHOUT a signature ────────────────
+        # She encrypts raw plaintext (no build_signed) so open_signed returns
+        # 'unsigned'. Pre-fix this rendered with no warning (impersonation);
+        # the receiver must now treat any non-'verified' group message as forged.
+        unsigned_ct = encrypt(b'stand down', gk)          # no signature framing
+        labels = [CMD_GROUP_SEND, gid, 'alice', protocol.gen_msg_id(), '0', '1'] + \
+            chunk_string(b32encode(unsigned_ct), MAX_LABEL_LEN)
+        mallory._q(labels)
+        got = bob.poll_group(gid)
+        unsigned = [m for m in got if m['text'] == 'stand down']
+        check('bob receives the unsigned forgery body', len(unsigned) == 1)
+        check('an UNSIGNED group message is flagged forged, not trusted',
+              unsigned[0]['auth'] == 'forged')
+
         sock_stop = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock_stop.sendto(b'stop', ('127.0.0.1', port))
     finally:

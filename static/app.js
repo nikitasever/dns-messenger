@@ -822,8 +822,8 @@ function renderMessages() {
         const checkHtml = isMine ? `<span class="msg-status${msg.read ? ' read' : ''}">${msg.read ? '\u2713\u2713' : '\u2713'}</span>` : '';
         // \u041f\u043e\u0434\u043f\u0438\u0441\u044c \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u0435\u043b\u044f \u043d\u0435 \u0441\u043e\u0448\u043b\u0430\u0441\u044c (\u043f\u043e\u0434\u0434\u0435\u043b\u043a\u0430) \u0438\u043b\u0438 \u043a\u043b\u044e\u0447 \u043f\u0438\u0440\u0430 \u0441\u043c\u0435\u043d\u0438\u043b\u0441\u044f \u2014
         // \u043f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0430\u0435\u043c \u044f\u0432\u043d\u043e, \u044d\u0442\u043e \u0432\u0430\u0436\u043d\u0435\u0435 \u043a\u043e\u0441\u043c\u0435\u0442\u0438\u043a\u0438.
-        const authWarn = (msg.auth === 'forged' || msg.auth === 'key_changed')
-            ? `<div class="msg-authwarn">\u26a0 ${msg.auth === 'forged' ? t('auth_forged') : t('auth_keychg')}</div>`
+        const authWarn = (msg.auth === 'forged' || msg.auth === 'unverified' || msg.auth === 'key_changed')
+            ? `<div class="msg-authwarn">\u26a0 ${msg.auth === 'key_changed' ? t('auth_keychg') : t('auth_forged')}</div>`
             : '';
 
         if (msg.videoMsg) {

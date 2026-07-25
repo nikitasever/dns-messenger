@@ -524,9 +524,15 @@ class UserMessenger:
                         plain = decrypt(b32decode(data), gk)
                         ctx = fr.encode('utf-8') + b'\x00' + gid.encode('utf-8')
                         pt, auth = open_signed(plain, self.peer_verify_key(fr), ctx)
+                        text = pt.decode('utf-8')
+                        # В группе ключ общий, поэтому ПОДЛИННЫЙ отправитель всегда
+                        # подписывает. Любой статус кроме 'verified' — подделка
+                        # участником (в т.ч. 'unsigned'/'unverified', которые иначе
+                        # рендерились бы без предупреждения). Жёстко метим 'forged'.
+                        if auth != 'verified':
+                            auth = 'forged'
                         if fr in self.key_alerts:
                             auth = 'key_changed'
-                        text = pt.decode('utf-8')
                     except Exception as e:
                         text, auth = f'[error: {e}]', 'error'
                 else:
