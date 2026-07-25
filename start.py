@@ -19,6 +19,14 @@ def start_relay():
 
 def start_web():
     """Start the web client."""
+    # За edge-прокси Railway (терминирует TLS, форвардит в контейнер) доверяем
+    # X-Forwarded-For — иначе client_ip() для всех клиентов = один IP прокси, и
+    # per-IP rate-limit'ы (login/admin) схлопываются в общий бакет (один
+    # атакующий лочит вход всем). И помечаем сессионную cookie Secure.
+    # Ставим ДО импорта web_client: оба читаются на уровне модуля.
+    os.environ.setdefault('TRUST_PROXY', '1')
+    os.environ.setdefault('SESSION_COOKIE_SECURE', '1')
+
     from web_client import app, socketio, init_admin
     from transport import UDPTransport
     import web_client

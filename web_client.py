@@ -1790,9 +1790,14 @@ if __name__ == '__main__':
         print(f'[*] Phone: {proto}://192.168.0.79:{args.web_port} (accept self-signed cert)')
     print(f'[*] Admin: {proto}://localhost:{args.web_port}/admin')
 
+    # По умолчанию слушаем ТОЛЬКО loopback: за Caddy это правильно (наружу
+    # ходит прокси с TLS+заголовками). Прямой bind на 0.0.0.0 отдавал бы
+    # приложение на :8080 в обход Caddy — открытый HTTP с паролем и без
+    # security-заголовков. Для доступа с телефона по LAN — BIND_HOST=0.0.0.0.
+    bind_host = os.environ.get('BIND_HOST', '127.0.0.1')
     if ssl_ctx:
-        socketio.run(app, host='0.0.0.0', port=args.web_port,
+        socketio.run(app, host=bind_host, port=args.web_port,
                      debug=False, allow_unsafe_werkzeug=True, ssl_context=ssl_ctx)
     else:
-        socketio.run(app, host='0.0.0.0', port=args.web_port,
+        socketio.run(app, host=bind_host, port=args.web_port,
                      debug=False, allow_unsafe_werkzeug=True)
