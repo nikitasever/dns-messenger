@@ -89,6 +89,11 @@ app.config['SECRET_KEY'] = _load_or_create_secret()
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+# Жёсткий предел размера тела запроса: Werkzeug оборвёт запрос ещё на разборе,
+# ДО буферизации. Без него api_file_send делал f.read() всего тела в память до
+# проверки 512 КБ — прямой memory/disk DoS многогигабайтной загрузкой. 2 МБ с
+# запасом покрывает 512-КБ файл + data-URL фото профиля + multipart-обвязку.
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
 
 # За обратным прокси (HTTPS-терминация на Caddy/nginx) реальный IP и схема
 # приходят в X-Forwarded-*. Включаем доверие к ним ТОЛЬКО по TRUST_PROXY=1 —
@@ -1081,7 +1086,7 @@ def api_send():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False, 'error': 'Not authorized'})
-    d = request.json or {}
+    d = get_json_dict()
     to = d.get('to')
     text = d.get('text')
     if not to or not text:
@@ -1141,7 +1146,7 @@ def api_group_invite():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False})
-    d = request.json or {}
+    d = get_json_dict()
     group = d.get('group')
     user = d.get('user')
     if not group or not user:
@@ -1154,7 +1159,7 @@ def api_group_send():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False})
-    d = request.json or {}
+    d = get_json_dict()
     group = d.get('group')
     text = d.get('text')
     if not group or not text:
@@ -1373,7 +1378,7 @@ def api_file_download():
     m = get_messenger()
     if not m:
         return jsonify({'ok': False})
-    d = request.json or {}
+    d = get_json_dict()
     fid = d.get('fid')
     frm = d.get('from')
     if not fid or not frm:
