@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" href="/static/icon-192.png">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
 </head>
-<body data-username="{{ username }}">
+<body data-username="{{ username }}" data-anon="{{ 'true' if is_anon else 'false' }}">
 
 <div class="app">
     <!-- ── Sidebar ─────────────────────────────────────────────── -->
@@ -245,6 +245,7 @@
 <div class="toast-container" id="toast-container"></div>
 
 <script src="/static/socket.io.min.js"></script>
+<script src="/static/webauthn.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

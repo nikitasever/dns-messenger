@@ -29,6 +29,13 @@ from flask_socketio import SocketIO, emit, join_room
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
+import webauthn
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria, UserVerificationRequirement,
+    PublicKeyCredentialDescriptor,
+)
+from webauthn.helpers.exceptions import WebAuthnException
+
 import webpush
 from transport import UDPTransport, DoHTransport, MultiTransport
 from protocol import (
@@ -199,6 +206,80 @@ def save_account(username: str, password_hash: str, salt: str):
     accs = get_accounts()
     accs[username] = {'hash': password_hash, 'salt': salt}
     _save_json(ACCOUNTS_FILE, accs)
+
+
+WEBAUTHN_FILE = Path('.messenger_webauthn.json')
+webauthn_lock = threading.Lock()
+# Второй фактор — только для register/login (пароль есть), не для анонима.
+# Сколько живёт подписанный клиентом challenge и «прошёл пароль, жду
+# passkey»-тикет: оба короткие и одноразовые (challenge стирается сразу
+# после использования; pending-тикет — по истечении PENDING_2FA_TTL).
+WEBAUTHN_CHALLENGE_TTL = 120.0
+PENDING_2FA_TTL = 180.0
+
+
+def get_webauthn_creds() -> dict:
+    with webauthn_lock:
+        return _load_json(WEBAUTHN_FILE)
+
+
+def user_webauthn_creds(username: str) -> list:
+    return get_webauthn_creds().get(username, [])
+
+
+def save_webauthn_cred(username: str, cred_id_b64: str, public_key_b64: str,
+                        sign_count: int, label: str):
+    with webauthn_lock:
+        data = _load_json(WEBAUTHN_FILE)
+        creds = data.setdefault(username, [])
+        creds.append({
+            'id': cred_id_b64, 'public_key': public_key_b64,
+            'sign_count': sign_count, 'label': label[:60],
+            'added_ts': time.time(),
+        })
+        _save_json(WEBAUTHN_FILE, data)
+
+
+def update_webauthn_sign_count(username: str, cred_id_b64: str, sign_count: int):
+    with webauthn_lock:
+        data = _load_json(WEBAUTHN_FILE)
+        for c in data.get(username, []):
+            if c['id'] == cred_id_b64:
+                c['sign_count'] = sign_count
+                break
+        _save_json(WEBAUTHN_FILE, data)
+
+
+def remove_webauthn_cred(username: str, cred_id_b64: str) -> bool:
+    with webauthn_lock:
+        data = _load_json(WEBAUTHN_FILE)
+        creds = data.get(username, [])
+        remaining = [c for c in creds if c['id'] != cred_id_b64]
+        if len(remaining) == len(creds):
+            return False
+        data[username] = remaining
+        _save_json(WEBAUTHN_FILE, data)
+        return True
+
+
+def webauthn_rp():
+    """(rp_id, origin) для текущего запроса. rp_id обязан быть доменом БЕЗ
+    порта и совпадать между регистрацией и логином passkey — иначе браузер
+    откажет в церемонии (WebAuthn это проверяет сам)."""
+    return request.host.split(':')[0], request.url_root.rstrip('/')
+
+
+def pending_2fa_user() -> str | None:
+    """Имя пользователя, который только что верно ввёл пароль и теперь должен
+    подтвердить passkey, или None. Тикет одноразовый по смыслу (сессия его не
+    выдаёт заново без нового /api/login) и короткоживущий."""
+    user = session.get('pending_2fa_user')
+    exp = session.get('pending_2fa_exp', 0)
+    if not user or time.time() > exp:
+        session.pop('pending_2fa_user', None)
+        session.pop('pending_2fa_exp', None)
+        return None
+    return user
 
 
 def get_blocked() -> set:
@@ -1041,7 +1122,7 @@ def index():
     m = get_messenger()
     if not m:
         return render_template('login.html', server_ip=server_ip, server_port=server_port)
-    return render_template('index.html', username=m.username)
+    return render_template('index.html', username=m.username, is_anon=bool(session.get('anon')))
 
 
 @app.route('/sw.js')
@@ -1156,6 +1237,17 @@ def api_login():
             except Exception as e:
                 return jsonify({'ok': False, 'error': str(e)})
 
+    # Второй фактор: если у аккаунта есть хоть один зарегистрированный passkey,
+    # пароль подтверждает ТОЛЬКО личность — сессию выдаём только после
+    # webauthn-подтверждения (см. /api/webauthn/login/*). Анонимный режим
+    # исключён: там и пароля-то нет. m уже создан и зарегистрирован на релее
+    # (нужен для webauthn/login/verify, который найдёт его в users[...] по
+    # имени), просто сессионную куку пока не выдаём.
+    if mode != 'anonymous' and user_webauthn_creds(username):
+        session['pending_2fa_user'] = username
+        session['pending_2fa_exp'] = time.time() + PENDING_2FA_TTL
+        return jsonify({'ok': True, 'need_webauthn': True})
+
     m.fetch_groups()
     start_poll_loop(m)
     session['username'] = username
@@ -1165,6 +1257,171 @@ def api_login():
     # identity даже после рестарта — иначе A2 воспроизводится через рестарт.
     session['anon'] = (mode == 'anonymous')
     print(f'[+] Login: {username} ({mode})')
+    return jsonify({'ok': True})
+
+
+def _finish_login(username: str):
+    """Общий хвост успешного входа — то, что api_login делает сразу, а
+    webauthn/login/verify делает после подтверждения passkey."""
+    with users_lock:
+        m = users.get(username)
+    if not m:
+        return False
+    m.fetch_groups()
+    start_poll_loop(m)
+    session['username'] = username
+    session['usv'] = current_user_sv(username)
+    session['anon'] = False
+    session.pop('pending_2fa_user', None)
+    session.pop('pending_2fa_exp', None)
+    print(f'[+] Login: {username} (webauthn)')
+    return True
+
+
+# ── WebAuthn (passkey) — второй фактор для register/login-аккаунтов ────
+# Пароль доказывает "я знаю секрет", passkey доказывает "у меня физическое
+# устройство/биометрия" — второй фактор, не замена пароля. Приватный ключ
+# passkey никогда не покидает устройство и никогда не приходит на сервер;
+# сервер хранит только публичный ключ и счётчик подписей.
+
+@app.route('/api/webauthn/register/options', methods=['POST'])
+def api_webauthn_register_options():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    if session.get('anon'):
+        # Анонимный аккаунт не имеет пароля — passkey тут не «второй
+        # фактор», а бессмысленный придаток к одноразовой identity (A2:
+        # анонимная identity не переживает даже следующий логин тем же
+        # ником, так что сохранённый passkey никогда не будет проверен).
+        return jsonify({'ok': False, 'error': 'Not available for anonymous accounts'}), 403
+    rp_id, _origin = webauthn_rp()
+    exclude = [
+        PublicKeyCredentialDescriptor(id=webauthn.base64url_to_bytes(c['id']))
+        for c in user_webauthn_creds(m.username)
+    ]
+    options = webauthn.generate_registration_options(
+        rp_id=rp_id, rp_name='DNS Messenger',
+        user_name=m.username, user_id=m.username.encode('utf-8'),
+        exclude_credentials=exclude,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            user_verification=UserVerificationRequirement.REQUIRED),
+    )
+    session['wa_reg_challenge'] = base64.b64encode(options.challenge).decode('ascii')
+    session['wa_reg_exp'] = time.time() + WEBAUTHN_CHALLENGE_TTL
+    session['wa_reg_user'] = m.username
+    return Response(webauthn.options_to_json(options), mimetype='application/json')
+
+
+@app.route('/api/webauthn/register/verify', methods=['POST'])
+def api_webauthn_register_verify():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    challenge_b64 = session.get('wa_reg_challenge')
+    exp = session.get('wa_reg_exp', 0)
+    # wa_reg_user привязывает challenge к тому, кто его запросил: иначе можно
+    # было бы начать церемонию под одним логином, а подтвердить под другим,
+    # если оба открыты в одной сессии/вкладке одновременно.
+    if not challenge_b64 or time.time() > exp or session.get('wa_reg_user') != m.username:
+        return jsonify({'ok': False, 'error': 'Registration ceremony expired, try again'})
+    d = get_json_dict()
+    label = str(d.get('label') or 'Passkey').strip()
+    try:
+        verification = webauthn.verify_registration_response(
+            credential=d.get('credential'),
+            expected_challenge=base64.b64decode(challenge_b64),
+            expected_rp_id=webauthn_rp()[0],
+            expected_origin=webauthn_rp()[1],
+            require_user_verification=True,
+        )
+    except WebAuthnException as e:
+        return jsonify({'ok': False, 'error': f'Verification failed: {e}'})
+    finally:
+        session.pop('wa_reg_challenge', None)
+        session.pop('wa_reg_exp', None)
+        session.pop('wa_reg_user', None)
+    save_webauthn_cred(
+        m.username,
+        webauthn.helpers.bytes_to_base64url(verification.credential_id),
+        base64.b64encode(verification.credential_public_key).decode('ascii'),
+        verification.sign_count, label,
+    )
+    return jsonify({'ok': True})
+
+
+@app.route('/api/webauthn/credentials')
+def api_webauthn_credentials():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    creds = [{'id': c['id'], 'label': c['label'], 'added_ts': c['added_ts']}
+             for c in user_webauthn_creds(m.username)]
+    return jsonify({'ok': True, 'credentials': creds})
+
+
+@app.route('/api/webauthn/credentials/remove', methods=['POST'])
+def api_webauthn_credentials_remove():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    cred_id = str(get_json_dict().get('id') or '')
+    ok = remove_webauthn_cred(m.username, cred_id)
+    return jsonify({'ok': ok})
+
+
+@app.route('/api/webauthn/login/options', methods=['POST'])
+def api_webauthn_login_options():
+    if rate_limited(f'webauthn:{client_ip()}', max_attempts=15, window_seconds=60.0):
+        return jsonify({'ok': False, 'error': 'Too many attempts. Try again later.'}), 429
+    username = pending_2fa_user()
+    if not username:
+        return jsonify({'ok': False, 'error': 'No pending login'}), 401
+    creds = user_webauthn_creds(username)
+    allow = [PublicKeyCredentialDescriptor(id=webauthn.base64url_to_bytes(c['id']))
+             for c in creds]
+    options = webauthn.generate_authentication_options(
+        rp_id=webauthn_rp()[0], allow_credentials=allow,
+        user_verification=UserVerificationRequirement.REQUIRED,
+    )
+    session['wa_auth_challenge'] = base64.b64encode(options.challenge).decode('ascii')
+    session['wa_auth_exp'] = time.time() + WEBAUTHN_CHALLENGE_TTL
+    return Response(webauthn.options_to_json(options), mimetype='application/json')
+
+
+@app.route('/api/webauthn/login/verify', methods=['POST'])
+def api_webauthn_login_verify():
+    if rate_limited(f'webauthn:{client_ip()}', max_attempts=15, window_seconds=60.0):
+        return jsonify({'ok': False, 'error': 'Too many attempts. Try again later.'}), 429
+    username = pending_2fa_user()
+    challenge_b64 = session.get('wa_auth_challenge')
+    exp = session.get('wa_auth_exp', 0)
+    if not username or not challenge_b64 or time.time() > exp:
+        return jsonify({'ok': False, 'error': 'Login ceremony expired, try again'})
+    d = get_json_dict()
+    credential = d.get('credential') or {}
+    raw_id = str(credential.get('id') or credential.get('rawId') or '')
+    stored = next((c for c in user_webauthn_creds(username) if c['id'] == raw_id), None)
+    if not stored:
+        return jsonify({'ok': False, 'error': 'Unknown credential'})
+    try:
+        verification = webauthn.verify_authentication_response(
+            credential=credential,
+            expected_challenge=base64.b64decode(challenge_b64),
+            expected_rp_id=webauthn_rp()[0],
+            expected_origin=webauthn_rp()[1],
+            credential_public_key=base64.b64decode(stored['public_key']),
+            credential_current_sign_count=stored['sign_count'],
+            require_user_verification=True,
+        )
+    except WebAuthnException as e:
+        return jsonify({'ok': False, 'error': f'Verification failed: {e}'})
+    finally:
+        session.pop('wa_auth_challenge', None)
+        session.pop('wa_auth_exp', None)
+    update_webauthn_sign_count(username, raw_id, verification.new_sign_count)
+    if not _finish_login(username):
+        return jsonify({'ok': False, 'error': 'Session expired, log in again'})
     return jsonify({'ok': True})
 
 

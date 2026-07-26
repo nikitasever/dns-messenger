@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="csrf-token" content="{{ csrf_token }}">
     <script src="/static/csrf.js"></script>
+    <script src="/static/webauthn.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DNS Мессенджер</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
@@ -289,6 +290,21 @@
                     body: JSON.stringify({ username, password, mode }),
                 }).then(r => r.json());
 
+                if (res.ok && res.need_webauthn) {
+                    // Пароль верен, но у аккаунта включён второй фактор —
+                    // сессия ещё не выдана, нужно подтвердить passkey.
+                    btn.textContent = lang === 'ru' ? 'Подтвердите passkey…' : 'Confirm your passkey…';
+                    try {
+                        await verifyPasskeyLogin();
+                        window.location.href = '/';
+                    } catch (werr) {
+                        errEl.textContent = (lang === 'ru' ? 'Passkey: ' : 'Passkey: ') + werr.message;
+                        errEl.style.display = 'block';
+                        btn.disabled = false;
+                        btn.textContent = origText;
+                    }
+                    return;
+                }
                 if (res.ok) {
                     window.location.href = '/';
                 } else {

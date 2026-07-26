@@ -369,6 +369,7 @@ const state = {
     currentChat: null,
     chats: {},
     username: document.body.dataset.username,
+    isAnon: document.body.dataset.anon === 'true',
     activeTab: 'all',
     knownUsers: [],
 };
@@ -1766,6 +1767,7 @@ function showSettings(initialSection) {
         { id: 'general',  icon: '\u2699',    title: 'Основные' },
         { id: 'notif',    icon: '\u{1F514}', title: 'Уведомления и звуки' },
         { id: 'privacy',  icon: '\u{1F512}', title: 'Конфиденциальность' },
+        { id: 'security', icon: '\u{1F5DD}', title: 'Passkeys' },
         { id: 'appear',   icon: '\u{1F3A8}', title: 'Оформление' },
         { id: 'chats',    icon: '\u{1F4AC}', title: 'Чаты' },
         { id: 'data',     icon: '\u{1F4BE}', title: 'Данные и хранилище' },
@@ -1879,6 +1881,37 @@ function buildSettingsSection(id) {
                     <div class="set-hint">Выйти из аккаунта на всех устройствах</div>
                 </div>
                 <button class="btn btn-danger" id="logout-all">Выйти</button>
+            </div>
+        `;
+    }
+    if (id === 'security' && state.isAnon) {
+        return `
+            <h4 class="set-section-title">Passkeys (вход по биометрии)</h4>
+            <div class="set-hint">
+                Недоступно для анонимного режима — тут нет пароля, а passkey
+                защищает именно вход по паролю как второй фактор. Для этого
+                выберите «Регистрация» на экране входа.
+            </div>
+        `;
+    }
+    if (id === 'security') {
+        // Список заполняется асинхронно в wireSettingsSection.
+        return `
+            <h4 class="set-section-title">Passkeys (вход по биометрии)</h4>
+            <div class="set-hint" style="margin-bottom:14px">
+                Отпечаток пальца, Face ID или ключ устройства как второй фактор входа —
+                в дополнение к паролю, не вместо него. Приватный ключ никогда не
+                покидает ваше устройство и не передаётся на сервер.
+            </div>
+            <div id="passkey-list" class="set-row" style="flex-direction:column;align-items:stretch">
+                <div class="set-hint">Загрузка…</div>
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Добавить passkey с этого устройства</div>
+                    <div class="set-hint">Потребует пароль при следующем входе, если ещё не зарегистрирован ни один passkey — после добавления входить будет нужно паролем + подтверждением здесь.</div>
+                </div>
+                <button class="btn btn-secondary" id="add-passkey">Добавить</button>
             </div>
         `;
     }
@@ -2146,6 +2179,71 @@ function wireSettingsSection(id, root, overlay) {
     if (id === 'privacy') {
         byId('logout-all')?.addEventListener('click', () => {
             if (confirm('Выйти из аккаунта?')) doLogout();
+        });
+    }
+    if (id === 'security' && !state.isAnon) {
+        const listEl = byId('passkey-list');
+        const renderList = async () => {
+            if (!listEl) return;
+            if (!webauthnSupported()) {
+                listEl.innerHTML = '<div class="set-hint">Этот браузер не поддерживает passkeys.</div>';
+                byId('add-passkey')?.setAttribute('disabled', 'disabled');
+                return;
+            }
+            try {
+                const res = await fetch('/api/webauthn/credentials').then(r => r.json());
+                const creds = (res.ok && res.credentials) || [];
+                if (!creds.length) {
+                    listEl.innerHTML = '<div class="set-hint">Passkeys ещё не добавлены — вход только по паролю.</div>';
+                    return;
+                }
+                listEl.innerHTML = '';
+                for (const c of creds) {
+                    const row = document.createElement('div');
+                    row.className = 'set-row';
+                    const info = document.createElement('div');
+                    const label = document.createElement('div');
+                    label.className = 'set-label';
+                    label.textContent = c.label;               // textContent — метка это пользовательский ввод
+                    const hint = document.createElement('div');
+                    hint.className = 'set-hint';
+                    hint.textContent = 'Добавлен ' + new Date(c.added_ts * 1000).toLocaleDateString();
+                    info.appendChild(label);
+                    info.appendChild(hint);
+                    const removeBtn = document.createElement('button');
+                    removeBtn.className = 'btn btn-danger';
+                    removeBtn.textContent = 'Удалить';
+                    removeBtn.addEventListener('click', async () => {
+                        if (!confirm('Удалить этот passkey?')) return;
+                        await fetch('/api/webauthn/credentials/remove', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id: c.id }),
+                        });
+                        renderList();
+                    });
+                    row.appendChild(info);
+                    row.appendChild(removeBtn);
+                    listEl.appendChild(row);
+                }
+            } catch (e) {
+                listEl.innerHTML = '<div class="set-hint">Не удалось загрузить список.</div>';
+            }
+        };
+        renderList();
+        byId('add-passkey')?.addEventListener('click', async () => {
+            const label = prompt('Название устройства (для себя же)', 'Мой ноутбук') || 'Passkey';
+            const addBtn = byId('add-passkey');
+            if (addBtn) { addBtn.disabled = true; addBtn.textContent = 'Ожидание устройства…'; }
+            try {
+                await registerPasskey(label);
+                toast('Passkey добавлен', 'success');
+                await renderList();
+            } catch (e) {
+                toast(e.message || 'Не удалось добавить passkey', 'error');
+            } finally {
+                if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Добавить'; }
+            }
         });
     }
     if (id === 'chats') {
