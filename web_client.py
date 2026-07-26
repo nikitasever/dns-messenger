@@ -372,19 +372,39 @@ def _is_transient_err(res: str) -> bool:
 
 
 class UserMessenger:
-    def __init__(self, username: str, transport, password: str | None = None):
+    def __init__(self, username: str, transport, password: str | None = None,
+                 persist_identity: bool = True):
         self.username = username
         self.transport = transport
         self.running = False
         self.poll_errors = 0
+        self.persist_identity = persist_identity
+
+        # Анонимный режим (persist_identity=False): identity и пины держим
+        # ТОЛЬКО в памяти этого объекта, не читаем и не пишем на диск. Анонимный
+        # identity-файл не защищён паролем — если бы он лежал по пути,
+        # производному лишь от НИКА, любой, кто позже выберет тот же ник
+        # (случайно или намеренно, спустя произвольное время после рестарта),
+        # тихо загрузил бы личность/почтовый ящик/пины ПРЕДЫДУЩЕГО анонима под
+        # этим ником — полный захват identity без единой проверки пароля.
+        if not persist_identity:
+            self.identity = Identity()
+            self.peer_keys: dict[str, bytes] = {}
+            self.peer_verify: dict[str, bytes] = {}
+            self.group_keys: dict[str, bytes] = {}
+            self.groups: dict[str, dict] = {}
+            self._pins_file = None
+            self._pins: dict[str, str] = {}
+            self.key_alerts: set[str] = set()
+            return
 
         data_dir = Path(f'.messenger_{username}')
         data_dir.mkdir(exist_ok=True)
         key_file = data_dir / 'identity.key'
         # Личность зарегистрированного пользователя шифруется паролем аккаунта.
-        # Аноним пароля не имеет → сырой файл (chmod 600). Если файл зашифрован,
-        # а пароля нет (напр. авто-восстановление сессии после рестарта) — load
-        # бросит IdentityLocked, и вызывающий отправит пользователя на логин.
+        # Если файл зашифрован, а пароля нет (напр. авто-восстановление сессии
+        # после рестарта) — load бросит IdentityLocked, и вызывающий отправит
+        # пользователя на логин.
         existing = key_file.read_bytes() if key_file.exists() else b''
         if existing:
             self.identity = Identity.load(str(key_file), password)
@@ -450,10 +470,11 @@ class UserMessenger:
         pinned = self._pins.get(user)
         if pinned is None:
             self._pins[user] = b32
-            try:
-                _save_json(self._pins_file, self._pins)
-            except OSError:
-                pass
+            if self._pins_file is not None:
+                try:
+                    _save_json(self._pins_file, self._pins)
+                except OSError:
+                    pass
             self.key_alerts.discard(user)
         elif pinned != b32:
             # Ключ под этим именем изменился — держимся закреплённого.
@@ -916,10 +937,10 @@ def get_messenger() -> UserMessenger | None:
     # Валидный cookie, но объекта нет — сервер перезапустили, а жил он только
     # в памяти. Пересобираем: ровно то, что сделал бы повторный вход, только
     # пользователя не выкидывает на экран логина посреди работы.
-    return _restore_messenger(username)
+    return _restore_messenger(username, anon=bool(session.get('anon')))
 
 
-def _restore_messenger(username: str) -> UserMessenger | None:
+def _restore_messenger(username: str, anon: bool = False) -> UserMessenger | None:
     if username in get_blocked():
         return None          # блокировку старый cookie обходить не должен
     with users_lock:
@@ -927,7 +948,10 @@ def _restore_messenger(username: str) -> UserMessenger | None:
         if m:
             return m         # успели создать, пока ждали лок
         try:
-            m = UserMessenger(username, transport)
+            # anon: рестарт не должен вернуть anon'у ЕГО ЖЕ старую identity с
+            # диска (там её и нет — persist_identity=False никогда её не писал)
+            # и уж тем более не должен начать её персистить задним числом.
+            m = UserMessenger(username, transport, persist_identity=not anon)
             if not m.register():
                 return None
             users[username] = m
@@ -1097,9 +1121,19 @@ def api_login():
 
     with users_lock:
         m = users.get(username)
+        if mode == 'anonymous' and m:
+            # Анонимы не аутентифицированы паролем, поэтому имя не может быть
+            # общим ключом идентификации между сессиями: если бы второй claim
+            # того же ника молча получал ТОТ ЖЕ уже активный UserMessenger, кто
+            # угодно перехватил бы живую анонимную сессию, просто введя тот же
+            # ник — без единого пароля. Проверка и создание — под одним и тем
+            # же логом, иначе гонка двух одновременных anon-логинов с
+            # одинаковым ником всё равно даёт второму объект первого.
+            return jsonify({'ok': False, 'error': 'This name is in use right now. Choose another.'})
         if not m:
             try:
-                m = UserMessenger(username, transport, password=id_pw)
+                m = UserMessenger(username, transport, password=id_pw,
+                                   persist_identity=(mode != 'anonymous'))
                 if not m.register():
                     return jsonify({'ok': False, 'error': 'Relay server unavailable'})
                 users[username] = m
@@ -1112,6 +1146,10 @@ def api_login():
     start_poll_loop(m)
     session['username'] = username
     session['usv'] = current_user_sv(username)
+    # Нужно для восстановления сессии после рестарта (_restore_messenger):
+    # анонимная сессия не должна получить персистентную (диск-загружаемую)
+    # identity даже после рестарта — иначе A2 воспроизводится через рестарт.
+    session['anon'] = (mode == 'anonymous')
     print(f'[+] Login: {username} ({mode})')
     return jsonify({'ok': True})
 
@@ -1124,6 +1162,16 @@ def api_logout():
         # Bump the session-version so the cookie just cleared (and any other
         # copy of it, captured before this call) can never be replayed again.
         bump_user_sv(username)
+        # Анонимная identity не персистентна (persist_identity=False) и не
+        # должна пережить логаут ни на диске, ни в памяти — иначе тот же
+        # объект (и открытая для этого ника identity/переписка) достался бы
+        # следующему, кто просто введёт тот же ник, что и есть сам A2. Заодно
+        # освобождает ник для повторного анонимного использования.
+        with users_lock:
+            m = users.get(username)
+            if m is not None and not m.persist_identity:
+                users.pop(username, None)
+                m.running = False
         print(f'[-] Logout: {username}')
     return jsonify({'ok': True})
 
