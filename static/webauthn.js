@@ -61,7 +61,7 @@ async function registerPasskey(label) {
         body: JSON.stringify({ credential: credentialJson, label: label || 'Passkey' }),
     }).then(r => r.json());
     if (!verifyRes.ok) throw new Error(verifyRes.error || 'Проверка не пройдена');
-    return true;
+    return verifyRes; // .backup_codes присутствует только на самом первом passkey
 }
 
 /* Подтверждает вход уже существующим passkey — вызывается ПОСЛЕ того как

@@ -127,7 +127,26 @@ def main():
                         json={'credential': {'id': 'x', 'rawId': 'x', 'type': 'public-key',
                                               'response': {'clientDataJSON': 'x', 'attestationObject': 'x'}},
                               'label': 'Test device'})
-        check('passkey registration verifies and stores the credential', r.get_json().get('ok') is True)
+        reg_body = r.get_json()
+        check('passkey registration verifies and stores the credential', reg_body.get('ok') is True)
+
+        # ── the very first passkey auto-issues one-time backup codes ────
+        backup_codes = reg_body.get('backup_codes')
+        check('the first passkey enrollment auto-issues 10 backup codes',
+              isinstance(backup_codes, list) and len(backup_codes) == 10)
+        check('backup codes are formatted for readability (XXXXX-XXXXX)',
+              all(len(c) == 11 and c[5] == '-' for c in backup_codes))
+        check('backup codes are all distinct', len(set(backup_codes)) == 10)
+
+        status = alice.get('/api/webauthn/backup-codes/status').get_json()
+        check('status reports 10/10 right after issuance',
+              status.get('remaining') == 10 and status.get('total') == 10)
+
+        with wc.webauthn_lock:
+            on_disk = wc._load_json(wc.BACKUP_CODES_FILE)['alice']
+        check('only hashes are persisted, never the plaintext codes',
+              all('hash' in e and 'plaintext' not in str(e) for e in on_disk) and
+              not any(c.replace('-', '') in str(on_disk) for c in backup_codes))
 
         r = alice.get('/api/webauthn/credentials')
         creds = r.get_json().get('credentials', [])
@@ -188,6 +207,52 @@ def main():
         check("the failed attempt didn't leave a stray session either",
               alice3.get('/api/me').get_json().get('logged_in') is False)
 
+        # ── logging in with a backup code instead of the passkey ────────
+        stranger2 = wc.app.test_client()
+        r = stranger2.post('/api/webauthn/login/backup', json={'code': backup_codes[0]})
+        check("a client that never passed the password step can't redeem a backup code either",
+              r.status_code == 401)
+
+        alice5 = wc.app.test_client()
+        alice5.post('/api/login', json={'username': 'alice', 'password': 'correct-horse-battery', 'mode': 'login'})
+        r = alice5.post('/api/webauthn/login/backup', json={'code': backup_codes[0]})
+        check('a valid, unused backup code logs in without touching the passkey ceremony',
+              r.get_json().get('ok') is True)
+        check('the session is granted', alice5.get('/api/me').get_json().get('logged_in') is True)
+
+        status = alice5.get('/api/webauthn/backup-codes/status').get_json()
+        check('one code being consumed drops remaining to 9 (still 10 total)',
+              status.get('remaining') == 9 and status.get('total') == 10)
+
+        alice6 = wc.app.test_client()
+        alice6.post('/api/login', json={'username': 'alice', 'password': 'correct-horse-battery', 'mode': 'login'})
+        r = alice6.post('/api/webauthn/login/backup', json={'code': backup_codes[0]})
+        check('the same backup code cannot be redeemed twice',
+              r.get_json().get('ok') is False)
+        check("the replay attempt didn't grant a session",
+              alice6.get('/api/me').get_json().get('logged_in') is False)
+
+        r = alice6.post('/api/webauthn/login/backup',
+                         json={'code': backup_codes[1].lower().replace('-', ' ')})
+        check('a differently-cased, un-dashed but otherwise correct code still works (normalized)',
+              r.get_json().get('ok') is True)
+
+        # ── regenerating invalidates the whole previous batch ────────────
+        r = alice5.post('/api/webauthn/backup-codes/generate')
+        new_codes = r.get_json().get('codes')
+        check('regenerating returns a fresh batch of 10', isinstance(new_codes, list) and len(new_codes) == 10)
+
+        alice7 = wc.app.test_client()
+        alice7.post('/api/login', json={'username': 'alice', 'password': 'correct-horse-battery', 'mode': 'login'})
+        r = alice7.post('/api/webauthn/login/backup', json={'code': backup_codes[2]})
+        check('an old, never-used code from before regeneration no longer works',
+              r.get_json().get('ok') is False)
+
+        alice8 = wc.app.test_client()
+        alice8.post('/api/login', json={'username': 'alice', 'password': 'correct-horse-battery', 'mode': 'login'})
+        r = alice8.post('/api/webauthn/login/backup', json={'code': new_codes[0]})
+        check('a code from the new batch works', r.get_json().get('ok') is True)
+
         # ── removing the passkey drops the 2FA requirement ───────────────
         alice2.post('/api/webauthn/credentials/remove', json={'id': cred_id})
         r = alice2.get('/api/webauthn/credentials')
@@ -197,6 +262,10 @@ def main():
         r = alice4.post('/api/login', json={'username': 'alice', 'password': 'correct-horse-battery', 'mode': 'login'})
         check('with no passkeys left, password alone logs in again',
               r.get_json().get('ok') is True and 'need_webauthn' not in r.get_json())
+
+        r = alice4.post('/api/webauthn/backup-codes/generate')
+        check('generating backup codes is refused with zero passkeys enrolled',
+              r.status_code == 400 and r.get_json().get('ok') is False)
 
         print(f"\n{passed} passed")
     finally:

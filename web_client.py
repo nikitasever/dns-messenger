@@ -262,6 +262,66 @@ def remove_webauthn_cred(username: str, cred_id_b64: str) -> bool:
         return True
 
 
+BACKUP_CODES_FILE = Path('.messenger_backup_codes.json')
+# Без 0/O/1/I/L — на глаз не спутать при переписывании с экрана на бумагу.
+BACKUP_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+BACKUP_CODE_COUNT = 10
+
+
+def _normalize_backup_code(code: str) -> str:
+    return re.sub(r'[\s-]', '', code.strip().upper())
+
+
+def _gen_backup_code() -> str:
+    raw = ''.join(secrets.choice(BACKUP_CODE_ALPHABET) for _ in range(10))
+    return raw  # хранится/сверяется без разделителя; дефис только для показа
+
+
+def generate_backup_codes(username: str) -> list[str]:
+    """Генерирует НОВЫЙ комплект кодов, безвозвратно затирая старый — старые
+    коды, даже неиспользованные, после этого не сработают. Возвращает коды
+    в открытом виде РОВНО ОДИН РАЗ (вызывающий должен показать их и не
+    сохранять текст ответа); на диск попадают только их хэши."""
+    codes = [_gen_backup_code() for _ in range(BACKUP_CODE_COUNT)]
+    with webauthn_lock:
+        data = _load_json(BACKUP_CODES_FILE)
+        entries = []
+        for code in codes:
+            h, s = _hash_password(code)
+            entries.append({'hash': h, 'salt': s, 'used': False})
+        data[username] = entries
+        _save_json(BACKUP_CODES_FILE, data)
+    return [f'{c[:5]}-{c[5:]}' for c in codes]
+
+
+def backup_codes_status(username: str) -> tuple[int, int]:
+    """(осталось_неиспользованных, всего_в_последнем_комплекте)."""
+    with webauthn_lock:
+        entries = _load_json(BACKUP_CODES_FILE).get(username, [])
+    remaining = sum(1 for e in entries if not e['used'])
+    return remaining, len(entries)
+
+
+def consume_backup_code(username: str, code: str) -> bool:
+    """Одноразовая проверка: код должен совпасть с ХЭШЕМ неиспользованной
+    записи. При успехе помечает её использованной необратимо (перебор
+    ограничен rate_limited() на вызывающей стороне — как и для пароля)."""
+    normalized = _normalize_backup_code(code)
+    if not normalized:
+        return False
+    with webauthn_lock:
+        data = _load_json(BACKUP_CODES_FILE)
+        entries = data.get(username, [])
+        for e in entries:
+            if e['used']:
+                continue
+            if _verify_password(normalized, e['hash'], e['salt']):
+                e['used'] = True
+                _save_json(BACKUP_CODES_FILE, data)
+                return True
+        return False
+
+
 def webauthn_rp():
     """(rp_id, origin) для текущего запроса. rp_id обязан быть доменом БЕЗ
     порта и совпадать между регистрацией и логином passkey — иначе браузер
@@ -1341,13 +1401,21 @@ def api_webauthn_register_verify():
         session.pop('wa_reg_challenge', None)
         session.pop('wa_reg_exp', None)
         session.pop('wa_reg_user', None)
+    is_first_credential = not user_webauthn_creds(m.username)
     save_webauthn_cred(
         m.username,
         webauthn.helpers.bytes_to_base64url(verification.credential_id),
         base64.b64encode(verification.credential_public_key).decode('ascii'),
         verification.sign_count, label,
     )
-    return jsonify({'ok': True})
+    resp = {'ok': True}
+    # Первый passkey на аккаунте включает требование второго фактора — без
+    # запасного пути один потерянный/сломанный аутентификатор означает
+    # безвозвратную потерю аккаунта (пароль всё ещё известен, но сессию он
+    # больше не даёт). Коды выдаются РОВНО ОДИН РАЗ, сразу здесь.
+    if is_first_credential:
+        resp['backup_codes'] = generate_backup_codes(m.username)
+    return jsonify(resp)
 
 
 @app.route('/api/webauthn/credentials')
@@ -1368,6 +1436,43 @@ def api_webauthn_credentials_remove():
     cred_id = str(get_json_dict().get('id') or '')
     ok = remove_webauthn_cred(m.username, cred_id)
     return jsonify({'ok': ok})
+
+
+@app.route('/api/webauthn/backup-codes/status')
+def api_backup_codes_status():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    remaining, total = backup_codes_status(m.username)
+    return jsonify({'ok': True, 'remaining': remaining, 'total': total})
+
+
+@app.route('/api/webauthn/backup-codes/generate', methods=['POST'])
+def api_backup_codes_generate():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    if not user_webauthn_creds(m.username):
+        # Коды без единого passkey бессмысленны: 2FA не требуется, вход и так
+        # только по паролю, а «запасной путь» к 2FA, которой нет, не нужен.
+        return jsonify({'ok': False, 'error': 'Add a passkey first'}), 400
+    codes = generate_backup_codes(m.username)
+    return jsonify({'ok': True, 'codes': codes})
+
+
+@app.route('/api/webauthn/login/backup', methods=['POST'])
+def api_webauthn_login_backup():
+    if rate_limited(f'webauthn:{client_ip()}', max_attempts=15, window_seconds=60.0):
+        return jsonify({'ok': False, 'error': 'Too many attempts. Try again later.'}), 429
+    username = pending_2fa_user()
+    if not username:
+        return jsonify({'ok': False, 'error': 'No pending login'}), 401
+    code = str(get_json_dict().get('code') or '')
+    if not consume_backup_code(username, code):
+        return jsonify({'ok': False, 'error': 'Invalid or already-used code'})
+    if not _finish_login(username):
+        return jsonify({'ok': False, 'error': 'Session expired, log in again'})
+    return jsonify({'ok': True})
 
 
 @app.route('/api/webauthn/login/options', methods=['POST'])

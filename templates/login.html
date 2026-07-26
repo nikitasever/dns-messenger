@@ -148,6 +148,16 @@
             <div class="error-msg" id="error-msg"></div>
         </form>
 
+        <div id="backup-code-box" style="display:none;text-align:left;margin-top:14px">
+            <button type="button" id="backup-code-toggle" style="background:none;border:none;color:var(--sec);font-size:13px;cursor:pointer;padding:0;text-decoration:underline"></button>
+            <div id="backup-code-form" style="display:none;margin-top:10px">
+                <div class="input-group" style="margin-bottom:8px">
+                    <input type="text" id="backup-code-input" placeholder="XXXXX-XXXXX" autocomplete="off" style="text-transform:uppercase">
+                </div>
+                <button type="button" class="btn-login" id="backup-code-submit"></button>
+            </div>
+        </div>
+
         <div class="info-box" id="info-box"></div>
 
         <div class="features-row">
@@ -179,6 +189,10 @@
                 feat_dns: 'DNS-туннель', feat_groups: 'Группы', feat_files: 'Файлы',
                 connecting: 'Подключение...', err_conn: 'Сервер недоступен', err_def: 'Ошибка подключения',
                 lang_label: 'Русский',
+                backup_toggle: 'Нет доступа к устройству? Ввести запасной код',
+                backup_submit: 'Войти по коду',
+                backup_checking: 'Проверка…',
+                backup_err: 'Неверный или уже использованный код',
             },
             en: {
                 title: 'DNS Messenger',
@@ -199,6 +213,10 @@
                 feat_dns: 'DNS tunnel', feat_groups: 'Groups', feat_files: 'Files',
                 connecting: 'Connecting...', err_conn: 'Server unavailable', err_def: 'Connection error',
                 lang_label: 'English',
+                backup_toggle: "Lost your device? Use a backup code",
+                backup_submit: 'Sign in with code',
+                backup_checking: 'Checking…',
+                backup_err: 'Invalid or already-used code',
             },
         };
         let lang = localStorage.getItem('dns_lang') || 'ru';
@@ -222,6 +240,10 @@
             set('t-feat-groups', d.feat_groups);
             set('t-feat-files', d.feat_files);
             set('lang-label', d.lang_label);
+            set('backup-code-submit', d.backup_submit);
+            if (document.getElementById('backup-code-box').style.display !== 'none') {
+                set('backup-code-toggle', d.backup_toggle);
+            }
             document.getElementById('username').placeholder = d.user_ph;
             document.getElementById('password').placeholder = d.pw_ph;
             document.getElementById('server-ip').placeholder = d.server_ip_ph;
@@ -302,6 +324,7 @@
                         errEl.style.display = 'block';
                         btn.disabled = false;
                         btn.textContent = origText;
+                        showBackupCodeOption();
                     }
                     return;
                 }
@@ -320,6 +343,49 @@
                 btn.textContent = origText;
             }
         }
+
+        function showBackupCodeOption() {
+            const box = document.getElementById('backup-code-box');
+            const toggle = document.getElementById('backup-code-toggle');
+            toggle.textContent = T().backup_toggle;
+            box.style.display = 'block';
+        }
+
+        document.getElementById('backup-code-toggle').addEventListener('click', () => {
+            const form = document.getElementById('backup-code-form');
+            form.style.display = form.style.display === 'none' ? 'block' : 'none';
+            if (form.style.display === 'block') document.getElementById('backup-code-input').focus();
+        });
+
+        document.getElementById('backup-code-submit').addEventListener('click', async () => {
+            const d = T();
+            const submitBtn = document.getElementById('backup-code-submit');
+            const errEl = document.getElementById('error-msg');
+            const code = document.getElementById('backup-code-input').value.trim();
+            if (!code) return;
+            submitBtn.disabled = true;
+            const orig = submitBtn.textContent;
+            submitBtn.textContent = d.backup_checking;
+            try {
+                const res = await fetch('/api/webauthn/login/backup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code }),
+                }).then(r => r.json());
+                if (res.ok) {
+                    window.location.href = '/';
+                } else {
+                    errEl.textContent = res.error || d.backup_err;
+                    errEl.style.display = 'block';
+                }
+            } catch (e) {
+                errEl.textContent = d.err_conn;
+                errEl.style.display = 'block';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = orig;
+            }
+        });
 
         applyLang();
     </script>

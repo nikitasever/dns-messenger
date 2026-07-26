@@ -1808,6 +1808,41 @@ function showSettings(initialSection) {
 // Back-compat: existing code/drawer may still call showPrivacySettings
 function showPrivacySettings() { showSettings('privacy'); }
 
+// Показывает набор запасных кодов РОВНО ОДИН РАЗ (сервер отдаёт их в открытом
+// виде только в ответ на генерацию — второй раз получить их же уже нельзя,
+// на диске лежат только хэши). Копирование — единственное действие, кроме
+// закрытия: удалить показанное с экрана мы не можем, но хотя бы не оставляем
+// лишних путей его продублировать.
+function showBackupCodesModal(codes) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+        <div class="modal">
+            <h3>Запасные коды входа</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">
+                Каждый код работает один раз — используйте, если потеряли устройство
+                с passkey. Сохраните их сейчас: повторно показать их будет нельзя,
+                только сгенерировать новый набор (старые при этом перестанут работать).
+            </p>
+            <pre style="background:var(--bg-input);padding:12px;border-radius:8px;
+                        font-size:14px;line-height:1.8;user-select:all;white-space:pre-wrap">${esc(codes.join('\n'))}</pre>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="copy-backup-codes">Скопировать</button>
+                <button class="btn" onclick="this.closest('.modal-overlay').remove()">Готово</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#copy-backup-codes')?.addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(codes.join('\n'));
+            toast('Скопировано', 'success');
+        } catch (e) {
+            toast('Не удалось скопировать', 'error');
+        }
+    });
+}
+
 function buildSettingsSection(id) {
     const toggleRow = (label, key, def, hint) => {
         const on = getSetting(key, def);
@@ -1912,6 +1947,15 @@ function buildSettingsSection(id) {
                     <div class="set-hint">Потребует пароль при следующем входе, если ещё не зарегистрирован ни один passkey — после добавления входить будет нужно паролем + подтверждением здесь.</div>
                 </div>
                 <button class="btn btn-secondary" id="add-passkey">Добавить</button>
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Запасные коды</div>
+                    <div class="set-hint">На случай утери устройства с passkey. Каждый код одноразовый.
+                        <span id="backup-codes-status"></span>
+                    </div>
+                </div>
+                <button class="btn btn-secondary" id="regen-backup-codes">Создать новые</button>
             </div>
         `;
     }
@@ -2236,13 +2280,41 @@ function wireSettingsSection(id, root, overlay) {
             const addBtn = byId('add-passkey');
             if (addBtn) { addBtn.disabled = true; addBtn.textContent = 'Ожидание устройства…'; }
             try {
-                await registerPasskey(label);
+                const res = await registerPasskey(label);
                 toast('Passkey добавлен', 'success');
                 await renderList();
+                await renderBackupStatus();
+                if (res.backup_codes) showBackupCodesModal(res.backup_codes);
             } catch (e) {
                 toast(e.message || 'Не удалось добавить passkey', 'error');
             } finally {
                 if (addBtn) { addBtn.disabled = false; addBtn.textContent = 'Добавить'; }
+            }
+        });
+
+        const backupEl = byId('backup-codes-status');
+        const renderBackupStatus = async () => {
+            if (!backupEl) return;
+            try {
+                const res = await fetch('/api/webauthn/backup-codes/status').then(r => r.json());
+                if (!res.ok) { backupEl.textContent = ''; return; }
+                backupEl.textContent = res.total
+                    ? `Осталось ${res.remaining} из ${res.total}`
+                    : 'Ещё не созданы';
+            } catch (e) {
+                backupEl.textContent = '';
+            }
+        };
+        renderBackupStatus();
+        byId('regen-backup-codes')?.addEventListener('click', async () => {
+            if (!confirm('Сгенерировать новый набор запасных кодов? Старые (даже неиспользованные) перестанут работать.')) return;
+            try {
+                const res = await fetch('/api/webauthn/backup-codes/generate', { method: 'POST' }).then(r => r.json());
+                if (!res.ok) { toast(res.error || 'Не удалось создать коды', 'error'); return; }
+                showBackupCodesModal(res.codes);
+                renderBackupStatus();
+            } catch (e) {
+                toast('Не удалось создать коды', 'error');
             }
         });
     }
