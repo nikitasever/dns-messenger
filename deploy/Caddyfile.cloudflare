@@ -1,0 +1,48 @@
+# DNS Messenger — HTTPS на нестандартном порту 8443 через Caddy + Cloudflare DNS-01.
+#
+# Зачем так: порты 80 и 443 на сервере заняты сторонним стеком (xray + 3x-ui),
+# поэтому ACME HTTP-01 (порт 80) и TLS-ALPN-01 (порт 443) недоступны. Вместо них
+# используем DNS-01 через Cloudflare API — он вообще не требует входящих 80/443,
+# только исходящий доступ к api.cloudflare.com. Сертификат при этом полностью
+# доверенный (Let's Encrypt), в отличие от самоподписанного.
+#
+# Требуется:
+#   1. Caddy с плагином caddy-dns/cloudflare:
+#        sudo caddy add-package github.com/caddy-dns/cloudflare
+#   2. Cloudflare API token (scope: Zone → DNS → Edit для зоны nikita-sever.ru)
+#      в переменной окружения CF_API_TOKEN (см. /etc/caddy/cloudflare.env).
+#   3. A-запись msg.nikita-sever.ru → 77.110.98.222, режим DNS only (серое облако),
+#      иначе Cloudflare проксирует только 80/443 и порт 8443 будет недоступен.
+#   4. Открытый ВХОДЯЩИЙ порт 8443/tcp (ufw + облачный firewall провайдера).
+#
+# Приложение остаётся на обычном HTTP 127.0.0.1:8080; TLS терминирует Caddy.
+
+{
+    # Не трогаем порт 80: xray/x-ui уже на нём. Уводим служебный HTTP-порт Caddy
+    # в сторону и выключаем авто-редиректы (нам нечего редиректить с 80).
+    http_port 8081
+    auto_https disable_redirects
+}
+
+msg.nikita-sever.ru:8443 {
+    encode zstd gzip
+
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+
+    # ── Security headers (ставит прокси, одинаково для всех ответов) ──────
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=(), usb=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' wss: https: stun: turn:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    }
+
+    reverse_proxy 127.0.0.1:8080 {
+        # Werkzeug палит версию питона и себя в Server: — срезаем на прокси.
+        header_down -Server
+    }
+}
