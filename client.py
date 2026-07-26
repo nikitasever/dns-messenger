@@ -29,8 +29,9 @@ from protocol import (
     b32encode, b32decode, chunk_string, gen_msg_id,
 )
 from crypto_utils import (
-    Identity, encrypt, decrypt,
+    Identity, encrypt, decrypt, SIG_LEN,
     generate_group_key, seal_group_key, unseal_group_key,
+    gkey_signing_input, split_bundle, verify_sig,
 )
 
 
@@ -105,8 +106,10 @@ class Messenger:
         gk = self.group_keys.get(gid)
         if not pk or not gk:
             return False
-        sealed = seal_group_key(gk, self.identity, pk)
-        labels = [CMD_GROUP_INVITE, gid, self.username, user] + chunk_string(b32encode(sealed), MAX_LABEL_LEN)
+        sealed = seal_group_key(gk, self.identity, pk, gid)
+        sig = self.identity.sign(gkey_signing_input(gid, gk, user))
+        labels = [CMD_GROUP_INVITE, gid, self.username, user] + chunk_string(
+            b32encode(sealed + sig), MAX_LABEL_LEN)
         return self._q(labels).startswith('OK')
 
     def send_group_msg(self, gid: str, text: str) -> bool:
@@ -152,7 +155,14 @@ class Messenger:
                 spk = self.get_peer_key(key_from)
                 if spk:
                     try:
-                        self.group_keys[gid] = unseal_group_key(b32decode(key_data), self.identity, spk)
+                        blob = b32decode(key_data)
+                        sealed, sig = blob[:-SIG_LEN], blob[-SIG_LEN:]
+                        gk = unseal_group_key(sealed, self.identity, spk, gid)
+                        _, vk = split_bundle(spk)
+                        if vk is None or not verify_sig(
+                                vk, gkey_signing_input(gid, gk, self.username), sig):
+                            continue
+                        self.group_keys[gid] = gk
                     except Exception:
                         pass
         return groups

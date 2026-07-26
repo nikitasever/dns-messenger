@@ -228,13 +228,35 @@ def generate_group_key() -> bytes:
     return os.urandom(32)
 
 
-def seal_group_key(group_key: bytes, my_identity: Identity, peer_public: bytes) -> bytes:
-    """Шифрует групповой ключ для конкретного участника (ECDH + ChaCha20)."""
+def seal_group_key(group_key: bytes, my_identity: Identity, peer_public: bytes,
+                    gid: str) -> bytes:
+    """Шифрует групповой ключ для конкретного участника (ECDH + ChaCha20).
+
+    gid — обязательные associated data. ECDH-секрет зависит только от пары
+    identity-ключей, а НЕ от группы, поэтому без привязки к gid недоверенный
+    релей мог бы переиграть перехваченный шифротекст ключа одной группы как
+    «ключ» другой группы между теми же двумя людьми (cross-group replay)."""
     shared = my_identity.derive_shared_key(peer_public)
-    return encrypt(group_key, shared)
+    nonce = os.urandom(12)
+    ct = ChaCha20Poly1305(shared).encrypt(nonce, group_key, gid.encode('utf-8'))
+    return nonce + ct
 
 
-def unseal_group_key(sealed: bytes, my_identity: Identity, sender_public: bytes) -> bytes:
+def unseal_group_key(sealed: bytes, my_identity: Identity, sender_public: bytes,
+                      gid: str) -> bytes:
     """Расшифровывает групповой ключ, полученный от создателя/инвайтера."""
     shared = my_identity.derive_shared_key(sender_public)
-    return decrypt(sealed, shared)
+    return ChaCha20Poly1305(shared).decrypt(sealed[:12], sealed[12:], gid.encode('utf-8'))
+
+
+GKEY_SIG_CONTEXT = b'dnsmsg-gkey-v1'
+
+
+def gkey_signing_input(gid: str, group_key: bytes, invited: str) -> bytes:
+    """Подпись инвайтера над (group, ключ, приглашённый). ECDH-шифрование уже
+    доказывает, что блок расшифровал именно тот, кто владеет приватным ключом
+    заявленного отправителя, но подпись даёт явное, проверяемое подтверждение,
+    что ИМЕННО ЭТОТ создатель/инвайтер авторизовал раздачу ИМЕННО ЭТОГО ключа
+    ИМЕННО ЭТОМУ участнику — второй, независимый слой защиты от релея,
+    подменяющего инвайтера в неаутентифицированном ginvite (см. G3)."""
+    return GKEY_SIG_CONTEXT + b'|' + gid.encode('utf-8') + b'|' + group_key + b'|' + invited.encode('utf-8')

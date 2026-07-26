@@ -40,9 +40,9 @@ from protocol import (
     b32encode, b32decode, chunk_string, gen_msg_id, gen_nonce,
 )
 from crypto_utils import (
-    Identity, IdentityLocked, IDENTITY_MAGIC, KEY_LEN, encrypt, decrypt,
-    generate_group_key, seal_group_key, unseal_group_key,
-    split_bundle, build_signed, open_signed,
+    Identity, IdentityLocked, IDENTITY_MAGIC, KEY_LEN, SIG_LEN, encrypt, decrypt,
+    generate_group_key, seal_group_key, unseal_group_key, gkey_signing_input,
+    split_bundle, build_signed, open_signed, verify_sig,
     poll_signing_input, fpoll_signing_input, glist_signing_input,
     reg_signing_input,
 )
@@ -530,8 +530,13 @@ class UserMessenger:
         gk = self.group_keys.get(gid)
         if not gk:
             return {'ok': False, 'error': 'No group key'}
-        sealed = seal_group_key(gk, self.identity, pk)
-        labels = [CMD_GROUP_INVITE, gid, self.username, user] + chunk_string(b32encode(sealed), MAX_LABEL_LEN)
+        sealed = seal_group_key(gk, self.identity, pk, gid)
+        # Подпись поверх (gid, ключ, приглашённый) — независимое от ECDH
+        # доказательство, что именно я авторизовал выдачу именно этого ключа
+        # именно этому участнику (см. crypto_utils.gkey_signing_input).
+        sig = self.identity.sign(gkey_signing_input(gid, gk, user))
+        labels = [CMD_GROUP_INVITE, gid, self.username, user] + chunk_string(
+            b32encode(sealed + sig), MAX_LABEL_LEN)
         ok = self._q(labels).startswith('OK')
         return {'ok': ok, 'error': '' if ok else 'Error'}
 
@@ -594,9 +599,22 @@ class UserMessenger:
             if gid in self.group_keys or not key_data or not key_from:
                 continue
             spk = self.get_peer_key(key_from)
+            vk = self.peer_verify_key(key_from)
             if spk:
                 try:
-                    self.group_keys[gid] = unseal_group_key(b32decode(key_data), self.identity, spk)
+                    blob = b32decode(key_data)
+                    sealed, sig = blob[:-SIG_LEN], blob[-SIG_LEN:]
+                    gk = unseal_group_key(sealed, self.identity, spk, gid)
+                    # ECDH уже доказывает, что key_from владеет заявленным
+                    # приватным ключом; подпись сверх этого доказывает, что
+                    # key_from именно ЭТИМ ключом авторизовал приглашение
+                    # именно в эту группу именно меня — иначе релей мог бы
+                    # подменить поле inviter в неаутентифицированном ginvite
+                    # (G3) и заставить нас принять чужой ключ как «от друга».
+                    if vk is None or not verify_sig(
+                            vk, gkey_signing_input(gid, gk, self.username), sig):
+                        continue
+                    self.group_keys[gid] = gk
                 except Exception:
                     pass
 

@@ -52,13 +52,13 @@ def start_relay(domain):
             sock.sendto(srv.handle_query(data), addr)
 
     threading.Thread(target=serve, daemon=True).start()
-    return port
+    return port, srv
 
 
 def main():
     print("group_auth")
     DOMAIN = 'msg.test.local'
-    port = start_relay(DOMAIN)
+    port, srv = start_relay(DOMAIN)
 
     # UserMessenger writes .messenger_<user>/ in CWD — isolate in a temp dir
     prev_cwd = os.getcwd()
@@ -125,6 +125,24 @@ def main():
         check('bob receives the unsigned forgery body', len(unsigned) == 1)
         check('an UNSIGNED group message is flagged forged, not trusted',
               unsigned[0]['auth'] == 'forged')
+
+        # ── G1: cross-group replay of a sealed group key must fail ─────
+        # The ECDH secret between alice and bob is the same for every group
+        # they share, so a relay that swaps which gid a sealed-key blob is
+        # served under would (without gid-bound AAD) hand bob a key he'd
+        # accept for the wrong room. Simulate the swap server-side and
+        # confirm unseal now fails (gid is authenticated data).
+        gid2 = 'anotherroom'
+        check('alice creates a second group', alice.create_group(gid2))
+        check('alice invites bob to the second group', alice.invite_to_group(gid2, 'bob')['ok'])
+        # Swap gid2's stored key entry for bob with gid's (secretroom) entry —
+        # same sender, same ciphertext, wrong room — simulating an untrusted
+        # relay that replays an old sealed-key blob under a different group.
+        with srv.lock:
+            srv.groups[gid2]['keys']['bob'] = dict(srv.groups[gid]['keys']['bob'])
+        bob.group_keys.pop(gid2, None)
+        bob.fetch_groups()
+        check('replayed cross-group key blob is rejected', gid2 not in bob.group_keys)
 
         sock_stop = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock_stop.sendto(b'stop', ('127.0.0.1', port))
