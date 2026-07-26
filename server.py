@@ -67,6 +67,26 @@ MAX_GROUPS = 5000           # групп в памяти релея
 MAX_USERS = 50000           # зарегистрированных имён
 STORE_TTL = 86400.0         # простаивающие группы/имена без активности — сутки
 
+# Релей — публичный UDP-порт, отвечающий бОльшим TXT-ответом на маленький
+# запрос. Source IP в UDP не проверяется НИКЕМ на сетевом уровне: атакующий
+# может подделать (spoof) его как IP жертвы и получить от релея ответ,
+# который тот сам, никем не приглашённый, шлёт в адрес жертвы — классическое
+# DNS/UDP-усиление (amplification/reflection), релей тут неотличим от
+# открытого DNS-резолвера. Так как «привязать только к localhost» тут нельзя
+# (это и есть смысл релея — быть публично доступным), закрываем это response
+# rate limiting (RRL) ПО ЗАЯВЛЕННОМУ источнику: ограничиваем не то, сколько
+# запросов шлёт атакующий (его реальный IP в спуфинге не виден никогда), а то,
+# сколько ответов релей готов направить в адрес ЛЮБОГО ОДНОГО заявленного
+# адреса — так реальный DNS software (BIND/PowerDNS) и решает эту проблему.
+UDP_RRL_MAX = 20            # ответов на заявленный source IP за окно
+UDP_RRL_WINDOW = 5.0        # секунд
+UDP_RRL_SWEEP_INTERVAL = 30.0
+# Хуже всего амплификация у `u` (список всех имён) — единственная команда,
+# чей ответ растёт с общим числом ПОЛЬЗОВАТЕЛЕЙ, а не с содержимым запроса.
+# Обрезаем её отдельно, не только общим RRL: 24 КБ ответ на 47-байтный запрос
+# при 2000 пользователях (514x) не ждёт, пока сработает лимит по частоте.
+MAX_LIST_USERS_REPLY = 200
+
 
 class RelayServer:
     def __init__(self, domain: str, bind: str = '0.0.0.0', port: int = 5353):
@@ -104,6 +124,10 @@ class RelayServer:
 
         # Троттлинг сметателя памяти.
         self._last_evict = time.time()
+
+        # Response-rate-limiting по заявленному источнику UDP-пакета (см. run()).
+        self._udp_hits: dict[str, list[float]] = {}
+        self._last_udp_sweep = time.time()
 
     # ═══════════════════════════════════════════════════════════════════
     # Личные сообщения
@@ -521,9 +545,13 @@ class RelayServer:
     # ═══════════════════════════════════════════════════════════════════
 
     def _h_list_users(self, L: list[str]) -> str:
-        """u — список всех зарегистрированных пользователей."""
+        """u — список зарегистрированных пользователей (без авторизации).
+
+        Обрезаем до MAX_LIST_USERS_REPLY: без этого ответ растёт с ОБЩИМ
+        числом пользователей, а не с чем-либо в запросе — главный вклад в
+        DNS/UDP-усиление (см. UDP_RRL_* выше)."""
         with self.lock:
-            user_list = list(self.users.keys())
+            user_list = list(self.users.keys())[:MAX_LIST_USERS_REPLY]
         if not user_list:
             return 'EMPTY'
         return 'USERS:' + '|'.join(user_list)
@@ -531,6 +559,30 @@ class RelayServer:
     # ═══════════════════════════════════════════════════════════════════
     # Утилиты
     # ═══════════════════════════════════════════════════════════════════
+
+    def _rrl_allow(self, ip: str) -> bool:
+        """Response-rate-limiting: не более UDP_RRL_MAX ответов на один
+        заявленный source IP за UDP_RRL_WINDOW секунд. См. комментарий у
+        UDP_RRL_MAX выше — это ограничивает не атакующего (его IP при
+        спуфинге не виден), а объём, который релей готов направить в адрес
+        любого ОДНОГО заявленного адреса, то есть ущерб для жертвы отражения."""
+        now = time.time()
+        with self.lock:
+            if now - self._last_udp_sweep > UDP_RRL_SWEEP_INTERVAL:
+                self._last_udp_sweep = now
+                cutoff = now - UDP_RRL_WINDOW
+                self._udp_hits = {
+                    k: hits for k, hits in
+                    ((k, [t for t in v if t > cutoff]) for k, v in self._udp_hits.items())
+                    if hits}
+            hits = self._udp_hits.setdefault(ip, [])
+            cutoff = now - UDP_RRL_WINDOW
+            while hits and hits[0] <= cutoff:
+                hits.pop(0)
+            if len(hits) >= UDP_RRL_MAX:
+                return False
+            hits.append(now)
+            return True
 
     def _remember_delivered(self, mid: str):
         """Помечает mid доставленным (для идемпотентности повторов)."""
@@ -704,6 +756,11 @@ class RelayServer:
 
         while True:
             data, addr = sock.recvfrom(4096)
+            # RRL до разбора запроса: заявленный source IP (addr[0]) в UDP
+            # ничем не проверяется и легко подделывается — сверх лимита просто
+            # молчим (ни ответа, ни ошибки: сама ошибка — тоже усиление).
+            if not self._rrl_allow(addr[0]):
+                continue
             try:
                 sock.sendto(self.handle_query(data), addr)
             except Exception as exc:

@@ -110,6 +110,32 @@ def main():
     check('the users store is bounded under a registration flood',
           len(srv.users) <= server.MAX_USERS)
 
+    # ── DNS/UDP amplification: `u` (list-users) reply is capped ─────────
+    # Unauthenticated, response grows with total registered users, not with
+    # anything in the request — the biggest single contributor to reflection
+    # amplification (measured ~514x at 2000 users before this cap).
+    srv2 = RelayServer('msg.tunnel.local')
+    for i in range(server.MAX_LIST_USERS_REPLY + 500):
+        srv2.users[f'u{i:06d}'] = {'bundle': b'x' * 64, 'pinned': False, 'ts': 0}
+    res = srv2._h_list_users([])
+    returned = res[len('USERS:'):].split('|')
+    check('list-users reply is capped regardless of how many are registered',
+          len(returned) == server.MAX_LIST_USERS_REPLY)
+
+    # ── DNS/UDP amplification: response-rate-limiting per claimed source IP ─
+    # UDP source IPs are trivially spoofable; RRL caps how much reply volume
+    # the relay is willing to aim at any ONE claimed address (the classic
+    # DNS-resolver mitigation for reflection abuse), not "the attacker" (whose
+    # real IP never appears in a spoofed packet).
+    srv3 = RelayServer('msg.tunnel.local')
+    allowed = [srv3._rrl_allow('1.2.3.4') for _ in range(server.UDP_RRL_MAX + 10)]
+    check('RRL allows exactly UDP_RRL_MAX replies to one claimed source per window',
+          allowed.count(True) == server.UDP_RRL_MAX)
+    check('RRL blocks the rest within the same window',
+          allowed[server.UDP_RRL_MAX:] == [False] * 10)
+    check('a different claimed source is unaffected by another one being throttled',
+          srv3._rrl_allow('5.6.7.8') is True)
+
     print(f"\n{passed} passed")
 
 
