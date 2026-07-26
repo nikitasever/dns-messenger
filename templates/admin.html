@@ -87,37 +87,71 @@
         function hash(s) { let h=0; for(let i=0;i<s.length;i++) h=((h<<5)-h+s.charCodeAt(i))|0; return Math.abs(h); }
         function color(n) { return COLORS[hash(n)%COLORS.length]; }
 
+        function tagEl(cls, text) {
+            const s = document.createElement('span');
+            s.className = 'tag ' + cls;
+            s.textContent = text;
+            return s;
+        }
+
+        function actionBtn(cls, text, onClick) {
+            const b = document.createElement('button');
+            b.className = cls;
+            b.textContent = text;
+            b.addEventListener('click', onClick);
+            return b;
+        }
+
         async function loadUsers() {
             const res = await fetch('/api/admin/users').then(r=>r.json());
             const el = document.getElementById('users-list');
             if (!res.ok || !res.users.length) { el.innerHTML='<div class="empty">No users</div>'; return; }
             el.innerHTML = '';
             for (const u of res.users) {
+                // Имя пользователя приходит с релея, а не только из формы
+                // регистрации веб-приложения (сырой DNS-протокол username не
+                // валидирует) — поэтому вставляем его ТОЛЬКО через textContent
+                // и addEventListener, никогда через innerHTML/inline-onclick
+                // с интерполяцией строки (это и было хранимой XSS: имя вида
+                // `<img onerror=...>` или `x'); alert(1); //` выполнилось бы
+                // в сессии админа при простом открытии панели).
                 const c = color(u.username);
-                const tags = [];
-                if (u.online) tags.push('<span class="tag online">online</span>');
-                if (u.registered) tags.push('<span class="tag registered">registered</span>');
-                else tags.push('<span class="tag anon">anonymous</span>');
-                if (u.blocked) tags.push('<span class="tag blocked">blocked</span>');
 
-                const actions = [];
+                const avatar = document.createElement('div');
+                avatar.className = 'user-avatar';
+                avatar.style.background = `linear-gradient(135deg,${c[0]},${c[1]})`;
+                avatar.textContent = u.username.slice(0, 1).toUpperCase();
+
+                const name = document.createElement('div');
+                name.className = 'user-name';
+                name.textContent = u.username;
+
+                const tagsWrap = document.createElement('div');
+                tagsWrap.className = 'user-tags';
+                if (u.online) tagsWrap.appendChild(tagEl('online', 'online'));
+                if (u.registered) tagsWrap.appendChild(tagEl('registered', 'registered'));
+                else tagsWrap.appendChild(tagEl('anon', 'anonymous'));
+                if (u.blocked) tagsWrap.appendChild(tagEl('blocked', 'blocked'));
+
+                const info = document.createElement('div');
+                info.className = 'user-info';
+                info.appendChild(name);
+                info.appendChild(tagsWrap);
+
+                const actionsWrap = document.createElement('div');
+                actionsWrap.className = 'user-actions';
                 if (u.blocked) {
-                    actions.push(`<button class="success" onclick="unblock('${u.username}')">Unblock</button>`);
+                    actionsWrap.appendChild(actionBtn('success', 'Unblock', () => unblock(u.username)));
                 } else {
-                    actions.push(`<button class="danger" onclick="block('${u.username}')">Block</button>`);
+                    actionsWrap.appendChild(actionBtn('danger', 'Block', () => block(u.username)));
                 }
-                actions.push(`<button class="danger" onclick="del('${u.username}')">Delete</button>`);
+                actionsWrap.appendChild(actionBtn('danger', 'Delete', () => del(u.username)));
 
                 const div = document.createElement('div');
                 div.className = 'user-row';
-                div.innerHTML = `
-                    <div class="user-avatar" style="background:linear-gradient(135deg,${c[0]},${c[1]})">${u.username[0].toUpperCase()}</div>
-                    <div class="user-info">
-                        <div class="user-name">${u.username}</div>
-                        <div class="user-tags">${tags.join('')}</div>
-                    </div>
-                    <div class="user-actions">${actions.join('')}</div>
-                `;
+                div.appendChild(avatar);
+                div.appendChild(info);
+                div.appendChild(actionsWrap);
                 el.appendChild(div);
             }
         }

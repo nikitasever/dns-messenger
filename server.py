@@ -40,6 +40,11 @@ BUNDLE_B32_LEN = len(b32encode(bytes(BUNDLE_LEN)))
 # Окно защиты poll-запроса от повтора: подписанный nonce нельзя переиспользовать
 # в этом окне. Клиент шлёт свежий случайный nonce на каждый poll.
 POLL_NONCE_TTL = 300.0
+# Допустимый разброс между временем клиента (в подписи) и сервера. Не про
+# защиту от повтора В ЭТОМ окне (то делает seen_poll_nonces) — а про то, что
+# seen_poll_nonces живёт только в памяти и обнуляется рестартом релея: ts вне
+# этого окна отклоняется независимо от того, помнит ли релей nonce вообще.
+POLL_TS_WINDOW = 120.0
 
 # Границы памяти релея. Хранилища наполняются НЕаутентифицированными
 # отправителями (послать сообщение/файл может кто угодно), поэтому без границ
@@ -205,33 +210,41 @@ class RelayServer:
             return True
 
     def _authorize_poll(self, user, entry, L, signing_input_fn, kind):
-        """Для ЗАКРЕПЛЁННОГО имени требует валидную подпись над (user, nonce)
-        плюс свежий (неповторённый) nonce. Легаси-имя (не закреплено) проходит
-        без подписи. Возвращает строку-ошибку или None, если запрос авторизован.
+        """Для ЗАКРЕПЛЁННОГО имени требует валидную подпись над (user, nonce, ts)
+        плюс свежий (неповторённый, недавний) nonce. Легаси-имя (не закреплено)
+        проходит без подписи. Возвращает строку-ошибку или None, если запрос
+        авторизован.
 
-        Формат подписанного запроса: [user, nonce, sig_b32-лейблы…].
+        Формат подписанного запроса: [user, nonce, ts, sig_b32-лейблы…]. ts —
+        подписанная метка времени клиента: seen_poll_nonces живёт только в
+        памяти релея, и рестарт сервера обнуляет память о уже виденных nonce —
+        без ts старый перехваченный (nonce, sig) можно было бы переиграть сразу
+        после рестарта. ts вне узкого окна отклоняется независимо от того,
+        помнит ли релей этот nonce вообще.
         """
         if not (entry and entry.get('pinned')):
             return None
-        signed_nonce, signed_sig = None, None
-        if len(L) >= 3:
+        signed_nonce, signed_ts, signed_sig = None, None, None
+        if len(L) >= 4:
             try:
-                sig = b32decode(''.join(L[2:]))
-                if len(sig) == 64:
-                    signed_nonce, signed_sig = L[1], sig
+                sig = b32decode(''.join(L[3:]))
+                if len(sig) == 64 and L[2].isdigit():
+                    signed_nonce, signed_ts, signed_sig = L[1], L[2], sig
             except Exception:
                 pass
+        if signed_ts is None or abs(time.time() - int(signed_ts)) > POLL_TS_WINDOW:
+            return 'ERR:auth'
         _x, ed_pub = split_bundle(entry['bundle'])
         if not (signed_sig and ed_pub and verify_sig(
-                ed_pub, signing_input_fn(user, signed_nonce), signed_sig)):
+                ed_pub, signing_input_fn(user, signed_nonce, signed_ts), signed_sig)):
             return 'ERR:auth'
         if not self._accept_poll_nonce(f'{kind}:{user}', signed_nonce):
             return 'ERR:replay'
         return None
 
     def _h_poll(self, L: list[str]) -> str:
-        # p.<user>.0                         — легаси (без подписи)
-        # p.<user>.<nonce>.<sig_b32…>        — подписанный
+        # p.<user>.0                               — легаси (без подписи)
+        # p.<user>.<nonce>.<ts>.<sig_b32…>         — подписанный
         if not L:
             return 'ERR:no_user'
         user = L[0]
@@ -336,8 +349,8 @@ class RelayServer:
         )
 
     def _h_gpoll(self, L: list[str]) -> str:
-        # q.<group>.<user>.0                 — легаси (без подписи)
-        # q.<group>.<user>.<nonce>.<sig_b32…> — подписанный
+        # q.<group>.<user>.0                       — легаси (без подписи)
+        # q.<group>.<user>.<nonce>.<ts>.<sig_b32…> — подписанный
         if len(L) < 2:
             return 'ERR:bad_gpoll'
         gid, user = L[0], L[1]
@@ -347,7 +360,7 @@ class RelayServer:
         # прочитанными от имени 'user' (кража доставки) или преждевременно
         # выбить их из хранилища релея (readers >= members).
         err = self._authorize_poll(
-            user, entry, L[1:], lambda u, n: gpoll_signing_input(gid, u, n), f'gpoll:{gid}')
+            user, entry, L[1:], lambda u, n, ts: gpoll_signing_input(gid, u, n, ts), f'gpoll:{gid}')
         if err:
             return err
         with self.lock:
@@ -377,8 +390,8 @@ class RelayServer:
         return f'GMSG:{msg["from"]}:{msg["data"]}'
 
     def _h_glist(self, L: list[str]) -> str:
-        # l.<user>                           — легаси (без подписи)
-        # l.<user>.<nonce>.<sig_b32…>        — подписанный
+        # l.<user>                                 — легаси (без подписи)
+        # l.<user>.<nonce>.<ts>.<sig_b32…>         — подписанный
         if not L:
             return 'ERR:no_user'
         user = L[0]
@@ -460,8 +473,8 @@ class RelayServer:
         return f'OK:chunk:{seq}'
 
     def _h_fpoll(self, L: list[str]) -> str:
-        # t.<user>                           — легаси (без подписи)
-        # t.<user>.<nonce>.<sig_b32…>        — подписанный
+        # t.<user>                                 — легаси (без подписи)
+        # t.<user>.<nonce>.<ts>.<sig_b32…>         — подписанный
         if not L:
             return 'ERR:no_user'
         user = L[0]

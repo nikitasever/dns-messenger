@@ -27,6 +27,7 @@ from flask import (
 )
 from flask_socketio import SocketIO, emit, join_room
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.utils import secure_filename
 
 import webpush
 from transport import UDPTransport, DoHTransport, MultiTransport
@@ -535,8 +536,9 @@ class UserMessenger:
             # Подписываем каждый poll свежим nonce: релей проверяет подпись
             # против нашего закреплённого ключа и не даёт чужому опустошить ящик.
             nonce = gen_nonce()
-            sig = self.identity.sign(poll_signing_input(self.username, nonce))
-            res = self._q([CMD_POLL, self.username, nonce]
+            ts = str(int(time.time()))
+            sig = self.identity.sign(poll_signing_input(self.username, nonce, ts))
+            res = self._q([CMD_POLL, self.username, nonce, ts]
                           + chunk_string(b32encode(sig), MAX_LABEL_LEN))
             if res == 'EMPTY' or res.startswith('ERR'):
                 break
@@ -598,8 +600,9 @@ class UserMessenger:
             # Подписываем poll: без этого чужой мог бы отметить наши групповые
             # сообщения прочитанными за нас (кража доставки) под нашим именем.
             nonce = gen_nonce()
-            sig = self.identity.sign(gpoll_signing_input(gid, self.username, nonce))
-            res = self._q([CMD_GROUP_POLL, gid, self.username, nonce]
+            ts = str(int(time.time()))
+            sig = self.identity.sign(gpoll_signing_input(gid, self.username, nonce, ts))
+            res = self._q([CMD_GROUP_POLL, gid, self.username, nonce, ts]
                           + chunk_string(b32encode(sig), MAX_LABEL_LEN))
             if res == 'EMPTY' or res.startswith('ERR'):
                 break
@@ -633,8 +636,9 @@ class UserMessenger:
     def fetch_groups(self):
         # Подписываем запрос списка групп — чужой не перечислит наши членства.
         nonce = gen_nonce()
-        sig = self.identity.sign(glist_signing_input(self.username, nonce))
-        res = self._q([CMD_GROUP_LIST, self.username, nonce]
+        ts = str(int(time.time()))
+        sig = self.identity.sign(glist_signing_input(self.username, nonce, ts))
+        res = self._q([CMD_GROUP_LIST, self.username, nonce, ts]
                       + chunk_string(b32encode(sig), MAX_LABEL_LEN))
         if not res.startswith('GROUPS:'):
             return
@@ -689,8 +693,9 @@ class UserMessenger:
             # Подписываем опрос входящих файлов (свой контекст, отличный от DM),
             # чтобы закреплённый file_inbox нельзя было опустошить чужому.
             nonce = gen_nonce()
-            sig = self.identity.sign(fpoll_signing_input(self.username, nonce))
-            res = self._q([CMD_FILE_POLL, self.username, nonce]
+            ts = str(int(time.time()))
+            sig = self.identity.sign(fpoll_signing_input(self.username, nonce, ts))
+            res = self._q([CMD_FILE_POLL, self.username, nonce, ts]
                           + chunk_string(b32encode(sig), MAX_LABEL_LEN))
             if res == 'EMPTY' or res.startswith('ERR'):
                 break
@@ -1519,10 +1524,15 @@ def api_file_get(token):
     data, filename, expires = entry
     if time.time() > expires:
         return 'Download link expired', 410
+    # filename пришёл от клиента (расшифрованное E2E-имя файла, но сама строка
+    # не проверена) и раньше шёл прямо в заголовок без экранирования — кавычка
+    # или служебный символ внутри могли сломать разбор Content-Disposition
+    # браузером. secure_filename режет до safe ASCII (без путей/кавычек/CR-LF).
+    safe_name = secure_filename(filename) or 'file'
     return Response(
         data,
         mimetype='application/octet-stream',
-        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        headers={'Content-Disposition': f'attachment; filename="{safe_name}"'},
     )
 
 

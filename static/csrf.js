@@ -18,8 +18,17 @@
         var method = (init.method ||
             (input && typeof input !== 'string' && input.method) || 'GET').toUpperCase();
         var url = typeof input === 'string' ? input : (input && input.url) || '';
-        // Only same-origin requests (relative URL, or absolute to our origin).
-        var sameOrigin = url.indexOf('://') === -1 || url.indexOf(location.origin) === 0;
+        // Only same-origin requests. MUST be an exact origin match via URL
+        // parsing, not a string-prefix check: indexOf(location.origin)===0
+        // treats "https://example.com.evil.com" as same-origin too (it DOES
+        // start with "https://example.com"), leaking the CSRF token — a
+        // secret meant only for this origin — to an attacker-controlled host.
+        var sameOrigin;
+        try {
+            sameOrigin = new URL(url, location.href).origin === location.origin;
+        } catch (e) {
+            sameOrigin = false;
+        }
         if (TOKEN && sameOrigin && UNSAFE[method]) {
             var headers = new Headers(
                 init.headers ||

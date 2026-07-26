@@ -38,7 +38,7 @@ SIG_LEN = 64
 # Зашифрован ключом, выведенным из пароля аккаунта через scrypt. Без magic —
 # «сырой» файл (аноним/легаси), читается как раньше.
 IDENTITY_MAGIC = b'IDENC1\n'
-_SCRYPT_N = 2 ** 14      # ~16 МБ памяти — заметно дороже для перебора пароля
+_SCRYPT_N = 2 ** 17      # ~128 МБ памяти — заметно дороже для офлайн-перебора пароля
 
 
 class IdentityLocked(Exception):
@@ -83,19 +83,28 @@ class Identity:
 
     def save(self, path: str, password: str | None = None):
         """Сохранить личность. С паролем — шифруем файл (scrypt + ChaCha20),
-        без пароля — сырые байты (аноним/легаси). chmod 600 в любом случае."""
-        p = Path(path)
+        без пароля — сырые байты (легаси-миграция; аноним теперь на диск
+        вообще не пишется, см. UserMessenger persist_identity). chmod 600 в
+        любом случае."""
         raw = self.private_bytes()
         if password:
             salt = os.urandom(16)
             blob = IDENTITY_MAGIC + salt + encrypt(raw, _derive_identity_key(password, salt))
         else:
             blob = raw
-        p.write_bytes(blob)
-        # Даже зашифрованный файл не делаем мирочитаемым: scrypt дорогой, но не
-        # бесконечный. На Windows/иных ФС chmod может быть no-op — не критично.
+        # os.open с mode=0o600 задаёт права ПРИ СОЗДАНИИ файла атомарно — в
+        # отличие от write_bytes()+chmod(), между которыми был бы короткий
+        # интервал, когда новый файл лежит с правами по умолчанию (umask),
+        # потенциально читаемыми другими локальными пользователями системы.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(blob)
+        # Существующий файл (перезапись/миграция) мог быть создан раньше с
+        # другими правами — подчищаем и в этом случае. На Windows/иных ФС
+        # chmod может быть no-op — не критично (см. mode= выше как основную
+        # защиту при первом создании).
         try:
-            os.chmod(p, 0o600)
+            os.chmod(path, 0o600)
         except OSError:
             pass
 
@@ -158,23 +167,30 @@ FPOLL_SIG_CONTEXT = b'dnsmsg-fpoll-v1'
 REG_SIG_CONTEXT = b'dnsmsg-reg-v1'
 
 
-def poll_signing_input(user: str, nonce: str) -> bytes:
-    """Канонические байты, которые клиент подписывает для poll-запроса (DM)."""
-    return POLL_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + nonce.encode('ascii')
+def poll_signing_input(user: str, nonce: str, ts: str) -> bytes:
+    """Канонические байты, которые клиент подписывает для poll-запроса (DM).
+
+    ts (клиентская unix-метка времени, тоже подписана) даёт релею способ
+    отклонить переигранный (nonce, sig) НЕЗАВИСИМО от seen_poll_nonces —
+    тот живёт только в памяти и обнуляется рестартом релея."""
+    return POLL_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + \
+        nonce.encode('ascii') + b'|' + ts.encode('ascii')
 
 
-def fpoll_signing_input(user: str, nonce: str) -> bytes:
+def fpoll_signing_input(user: str, nonce: str, ts: str) -> bytes:
     """То же для опроса входящих файлов. Отдельный контекст не даёт выдать
     подпись DM-poll за подпись file-poll (и наоборот)."""
-    return FPOLL_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + nonce.encode('ascii')
+    return FPOLL_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + \
+        nonce.encode('ascii') + b'|' + ts.encode('ascii')
 
 
 GLIST_SIG_CONTEXT = b'dnsmsg-glist-v1'
 
 
-def glist_signing_input(user: str, nonce: str) -> bytes:
+def glist_signing_input(user: str, nonce: str, ts: str) -> bytes:
     """Подпись запроса списка групп: не даёт чужому перечислить членства user'а."""
-    return GLIST_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + nonce.encode('ascii')
+    return GLIST_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + \
+        nonce.encode('ascii') + b'|' + ts.encode('ascii')
 
 
 def reg_signing_input(user: str, bundle: bytes) -> bytes:
@@ -186,14 +202,14 @@ GPOLL_SIG_CONTEXT = b'dnsmsg-gpoll-v1'
 GINVITE_SIG_CONTEXT = b'dnsmsg-ginvite-v1'
 
 
-def gpoll_signing_input(gid: str, user: str, nonce: str) -> bytes:
+def gpoll_signing_input(gid: str, user: str, nonce: str, ts: str) -> bytes:
     """Подпись опроса группового ящика: без неё релей принял бы ЛЮБОЕ заявленное
     имя как поллера — а раз group_mail отмечает сообщение прочитанным по имени
     из запроса, чужой мог бы отметить чужие сообщения прочитанными раньше
     настоящего получателя (кража доставки) или преждевременно выбить их из
     хранилища релея (msgs.pop при readers >= members)."""
     return GPOLL_SIG_CONTEXT + b'|' + gid.encode('utf-8') + b'|' + \
-        user.encode('utf-8') + b'|' + nonce.encode('ascii')
+        user.encode('utf-8') + b'|' + nonce.encode('ascii') + b'|' + ts.encode('ascii')
 
 
 def ginvite_signing_input(gid: str, inviter: str, invited: str) -> bytes:

@@ -17,6 +17,7 @@ Run:  python tests/test_relay_auth.py
 """
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -48,22 +49,25 @@ def reg_L(user, ident, signed=True):
     return [user] + chunk_string(payload, MAX_LABEL_LEN)
 
 
-def poll_L(user, ident, nonce=None):
+def poll_L(user, ident, nonce=None, ts=None):
     nonce = nonce or gen_nonce()
-    sig = ident.sign(poll_signing_input(user, nonce))
-    return [user, nonce] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
+    ts = ts if ts is not None else str(int(time.time()))
+    sig = ident.sign(poll_signing_input(user, nonce, ts))
+    return [user, nonce, ts] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
 
 
-def fpoll_L(user, ident, nonce=None):
+def fpoll_L(user, ident, nonce=None, ts=None):
     nonce = nonce or gen_nonce()
-    sig = ident.sign(fpoll_signing_input(user, nonce))
-    return [user, nonce] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
+    ts = ts if ts is not None else str(int(time.time()))
+    sig = ident.sign(fpoll_signing_input(user, nonce, ts))
+    return [user, nonce, ts] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
 
 
-def glist_L(user, ident, nonce=None):
+def glist_L(user, ident, nonce=None, ts=None):
     nonce = nonce or gen_nonce()
-    sig = ident.sign(glist_signing_input(user, nonce))
-    return [user, nonce] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
+    ts = ts if ts is not None else str(int(time.time()))
+    sig = ident.sign(glist_signing_input(user, nonce, ts))
+    return [user, nonce, ts] + chunk_string(b32encode(sig), MAX_LABEL_LEN)
 
 
 def main():
@@ -104,6 +108,21 @@ def main():
     srv.mailbox['alice'].append({'from': 'bob', 'data': 'ciphertext3'})
     check('replaying the same signed nonce is refused', srv._h_poll(labels) == 'ERR:replay')
     check('the message survives the replayed poll', len(srv.mailbox['alice']) == 1)
+
+    # ── stale timestamp is refused even with a never-before-seen nonce ──
+    # This is the guarantee seen_poll_nonces alone can't give: it only lives
+    # in memory, so a relay restart forgets every nonce it had seen, and a
+    # captured (nonce, sig) pair from before the restart would otherwise
+    # replay cleanly against the fresh in-memory state. A signed, bounded
+    # timestamp closes that gap independently of what the relay remembers.
+    stale_ts = str(int(time.time()) - 999)
+    stale_labels = poll_L('alice', alice, ts=stale_ts)
+    check('a stale (out-of-window) timestamp is refused even with a fresh nonce',
+          srv._h_poll(stale_labels) == 'ERR:auth')
+    future_ts = str(int(time.time()) + 999)
+    future_labels = poll_L('alice', alice, ts=future_ts)
+    check('a far-future timestamp is refused too (clock-skew abuse)',
+          srv._h_poll(future_labels) == 'ERR:auth')
 
     # ── file-inbox poll: same protection, distinct signing context ──────
     srv.files['fid1'] = {'from': 'bob', 'name': 'doc', 'size': '10',
