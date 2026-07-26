@@ -493,13 +493,22 @@ class UserMessenger:
             return self.peer_keys[user]
         res = self._q_reliable([CMD_GETKEY, user])   # чтение, повтор безопасно
         if res.startswith('KEY:'):
+            flag_str, _, bundle_b32 = res[4:].partition(':')
+            if flag_str not in ('0', '1'):
+                return None                      # неожиданный формат — не падаем
             try:
-                bundle = b32decode(res[4:])
+                bundle = b32decode(bundle_b32)
             except Exception:
                 return None                      # битый base32 от релея — не падаем
             # Принимаем только валидные длины бандла: 32 (легаси X25519) или 64
             # (X25519+Ed25519). Отбрасывает мусор и странные усечения.
             if len(bundle) not in (KEY_LEN, 2 * KEY_LEN):
+                return None
+            # pinned=1 по построению сервера означает 64-байтный бандл (см.
+            # _h_register): 32 байта при pinned=1 — противоречивый ответ,
+            # похожий на релей, тайком урезающий чужой бандл до "легаси" и тем
+            # понижающий Ed25519-проверку до вечного 'unverified'/'unknown'.
+            if flag_str == '1' and len(bundle) != 2 * KEY_LEN:
                 return None
             return self._remember_peer(user, bundle)
         return None

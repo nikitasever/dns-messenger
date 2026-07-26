@@ -25,7 +25,7 @@ from crypto_utils import (                                        # noqa: E402
     Identity, poll_signing_input, fpoll_signing_input,
     glist_signing_input, reg_signing_input,
 )
-from protocol import b32encode, chunk_string, MAX_LABEL_LEN, gen_nonce    # noqa: E402
+from protocol import b32encode, b32decode, chunk_string, MAX_LABEL_LEN, gen_nonce    # noqa: E402
 
 passed = 0
 
@@ -160,6 +160,38 @@ def main():
     srv._h_register(reg_L('dave', attacker, signed=True))      # different key, signed
     check('an attacker cannot pin a legacy name they do not own',
           srv.users['dave']['pinned'] is False)
+
+    # ── A3: getkey exposes the pinned flag so a truncated (32-byte) bundle
+    # served for a PINNED (should always be 64-byte) identity is detectable
+    # as an inconsistent, tampered response rather than silently accepted
+    # as "just a legacy peer" (which would downgrade Ed25519 verification
+    # to unverified forever) ────────────────────────────────────────────
+    res = srv._h_getkey(['alice'])
+    check("getkey reports pinned=1 for alice's fully-signed bundle",
+          res.startswith('KEY:1:'))
+    check("getkey's bundle for a pinned user is the full 64-byte bundle",
+          len(b32decode(res.split(':', 2)[2])) == 64)
+    res_legacy = srv._h_getkey(['carol'])
+    check('getkey reports pinned=1 for carol too (upgraded to pinned above)',
+          res_legacy.startswith('KEY:1:'))
+
+    import os as _os, tempfile as _tempfile
+    _prev = _os.getcwd()
+    _os.chdir(_tempfile.mkdtemp())
+    try:
+        import web_client
+        eve = web_client.UserMessenger('eve', None, persist_identity=False)
+
+        class _FakeTransport:
+            """Simulates a relay that reports pinned=1 but truncates the bundle."""
+            def query(self, labels):
+                return 'KEY:1:' + b32encode(alice.public_bytes())   # only 32 bytes
+
+        eve.transport = _FakeTransport()
+        check('a pinned=1 response truncated to 32 bytes is rejected, not pinned',
+              eve.get_peer_key('alice') is None and 'alice' not in eve.peer_keys)
+    finally:
+        _os.chdir(_prev)
 
     print(f"\n{passed} passed")
 

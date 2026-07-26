@@ -63,7 +63,8 @@ class Messenger:
             return self.peer_keys[user]
         res = self._q([CMD_GETKEY, user])
         if res.startswith('KEY:'):
-            k = b32decode(res[4:])
+            _flag, _, bundle_b32 = res[4:].partition(':')
+            k = b32decode(bundle_b32)
             self.peer_keys[user] = k
             return k
         return None

@@ -163,12 +163,20 @@ class RelayServer:
         return f'OK:{user}'
 
     def _h_getkey(self, L: list[str]) -> str:
+        # KEY:<0|1 — pinned>:<bundle_b32>. pinned=1 гарантирует по построению
+        # (см. _h_register), что bundle — полные 64 байта X25519||Ed25519: имя
+        # закрепляется лишь после проверки подписи над ПОЛНЫМ бандлом. Клиент
+        # может обнаружить несогласованный ответ (pinned=1, но бандл усечён до
+        # 32 байт) — тайком понизивший до "легаси" релей, если тот честен хотя
+        # бы про сам факт закрепления (см. get_peer_key).
         if not L:
             return 'ERR:no_user'
         with self.lock:
             entry = self.users.get(L[0])
         pk = entry['bundle'] if entry else None
-        return f'KEY:{b32encode(pk)}' if pk else 'ERR:not_found'
+        if not pk:
+            return 'ERR:not_found'
+        return f'KEY:{1 if entry.get("pinned") else 0}:{b32encode(pk)}'
 
     def _h_send(self, L: list[str]) -> str:
         if len(L) < 6:
