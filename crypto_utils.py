@@ -182,6 +182,35 @@ def reg_signing_input(user: str, bundle: bytes) -> bytes:
     return REG_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + bundle
 
 
+GPOLL_SIG_CONTEXT = b'dnsmsg-gpoll-v1'
+GINVITE_SIG_CONTEXT = b'dnsmsg-ginvite-v1'
+
+
+def gpoll_signing_input(gid: str, user: str, nonce: str) -> bytes:
+    """Подпись опроса группового ящика: без неё релей принял бы ЛЮБОЕ заявленное
+    имя как поллера — а раз group_mail отмечает сообщение прочитанным по имени
+    из запроса, чужой мог бы отметить чужие сообщения прочитанными раньше
+    настоящего получателя (кража доставки) или преждевременно выбить их из
+    хранилища релея (msgs.pop при readers >= members)."""
+    return GPOLL_SIG_CONTEXT + b'|' + gid.encode('utf-8') + b'|' + \
+        user.encode('utf-8') + b'|' + nonce.encode('ascii')
+
+
+def ginvite_signing_input(gid: str, inviter: str, invited: str) -> bytes:
+    """Подпись приглашения в группу: без неё релей принял бы приглашение от
+    ЛЮБОГО заявленного 'inviter' (проверяется лишь членство по имени, не
+    владение ключом), позволяя чужому раздувать grp['members'] произвольными
+    именами — что мешает вычитке (readers >= members никогда не достигается)
+    и даёт постороннему статус «участник» для legit gpoll под тем же именем.
+
+    Без nonce (в отличие от poll/glist): повтор ЭТОЙ подписи лишь заново
+    исполняет то же самое приглашение того же inviter'а того же user'а в ту же
+    группу — идемпотентно и безвредно, а бюджет DNS-имени (~253 симв.) не
+    позволяет добавить ещё один лейбл сверх подписи и запечатанного ключа."""
+    return GINVITE_SIG_CONTEXT + b'|' + gid.encode('utf-8') + b'|' + \
+        inviter.encode('utf-8') + b'|' + invited.encode('utf-8')
+
+
 # ── Подписанная нагрузка ─────────────────────────────────────────────
 # Внутри шифротекста лежит: VERSION(1) || Ed25519-подпись(64) || plaintext.
 # Подпись покрывает context || plaintext, где context привязывает сообщение к

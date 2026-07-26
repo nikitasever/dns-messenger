@@ -40,11 +40,11 @@ from protocol import (
     b32encode, b32decode, chunk_string, gen_msg_id, gen_nonce,
 )
 from crypto_utils import (
-    Identity, IdentityLocked, IDENTITY_MAGIC, KEY_LEN, SIG_LEN, encrypt, decrypt,
-    generate_group_key, seal_group_key, unseal_group_key, gkey_signing_input,
-    split_bundle, build_signed, open_signed, verify_sig,
+    Identity, IdentityLocked, IDENTITY_MAGIC, KEY_LEN, encrypt, decrypt,
+    generate_group_key, seal_group_key, unseal_group_key,
+    split_bundle, build_signed, open_signed,
     poll_signing_input, fpoll_signing_input, glist_signing_input,
-    reg_signing_input,
+    reg_signing_input, gpoll_signing_input, ginvite_signing_input,
 )
 
 app = Flask(__name__)
@@ -530,13 +530,25 @@ class UserMessenger:
         gk = self.group_keys.get(gid)
         if not gk:
             return {'ok': False, 'error': 'No group key'}
+        # gid — associated data при шифровании (см. seal_group_key): ECDH-секрет
+        # тот же для любой пары людей независимо от группы, поэтому без этого
+        # ciphertext одной группы решифровался бы (успешно!) как ключ другой.
         sealed = seal_group_key(gk, self.identity, pk, gid)
-        # Подпись поверх (gid, ключ, приглашённый) — независимое от ECDH
-        # доказательство, что именно я авторизовал выдачу именно этого ключа
-        # именно этому участнику (см. crypto_utils.gkey_signing_input).
-        sig = self.identity.sign(gkey_signing_input(gid, gk, user))
+        # Подпись поверх самого relay-запроса (gid, inviter, invited, nonce) —
+        # доказывает релею, что ИМЕННО Я, владелец закреплённого имени
+        # self.username, сейчас приглашаю user в gid. Без неё релей принял бы
+        # invite от кого угодно, заявившего чужое имя инвайтера, и раздул
+        # grp['members'] произвольными именами (см. crypto_utils.ginvite_signing_input).
+        # DNS qname ограничен ~253 символами — бюджета хватает на один такой
+        # сигнатурный блок сверх sealed-ключа, поэтому вторую (per-key) подпись
+        # не добавляем: успешная AEAD-расшифровка с этим gid как AAD уже сама
+        # по себе доказывает, что sealed создан владельцем заявленного
+        # приватного ключа именно для этой группы — независимая подпись
+        # добавила бы только избыточность, а не новую гарантию.
+        invite_sig = self.identity.sign(
+            ginvite_signing_input(gid, self.username, user))
         labels = [CMD_GROUP_INVITE, gid, self.username, user] + chunk_string(
-            b32encode(sealed + sig), MAX_LABEL_LEN)
+            b32encode(invite_sig) + b32encode(sealed), MAX_LABEL_LEN)
         ok = self._q(labels).startswith('OK')
         return {'ok': ok, 'error': '' if ok else 'Error'}
 
@@ -553,7 +565,12 @@ class UserMessenger:
     def poll_group(self, gid: str) -> list[dict]:
         msgs = []
         while True:
-            res = self._q([CMD_GROUP_POLL, gid, self.username])
+            # Подписываем poll: без этого чужой мог бы отметить наши групповые
+            # сообщения прочитанными за нас (кража доставки) под нашим именем.
+            nonce = gen_nonce()
+            sig = self.identity.sign(gpoll_signing_input(gid, self.username, nonce))
+            res = self._q([CMD_GROUP_POLL, gid, self.username, nonce]
+                          + chunk_string(b32encode(sig), MAX_LABEL_LEN))
             if res == 'EMPTY' or res.startswith('ERR'):
                 break
             if res.startswith('GMSG:'):
@@ -599,22 +616,14 @@ class UserMessenger:
             if gid in self.group_keys or not key_data or not key_from:
                 continue
             spk = self.get_peer_key(key_from)
-            vk = self.peer_verify_key(key_from)
             if spk:
                 try:
-                    blob = b32decode(key_data)
-                    sealed, sig = blob[:-SIG_LEN], blob[-SIG_LEN:]
-                    gk = unseal_group_key(sealed, self.identity, spk, gid)
-                    # ECDH уже доказывает, что key_from владеет заявленным
-                    # приватным ключом; подпись сверх этого доказывает, что
-                    # key_from именно ЭТИМ ключом авторизовал приглашение
-                    # именно в эту группу именно меня — иначе релей мог бы
-                    # подменить поле inviter в неаутентифицированном ginvite
-                    # (G3) и заставить нас принять чужой ключ как «от друга».
-                    if vk is None or not verify_sig(
-                            vk, gkey_signing_input(gid, gk, self.username), sig):
-                        continue
-                    self.group_keys[gid] = gk
+                    # unseal_group_key проверяет gid как AEAD-associated-data:
+                    # ciphertext ключа ОДНОЙ группы больше не расшифруется как
+                    # ключ ДРУГОЙ группы между теми же двумя identity, даже
+                    # если релей подсунет его под другим gid (см. seal_group_key).
+                    self.group_keys[gid] = unseal_group_key(
+                        b32decode(key_data), self.identity, spk, gid)
                 except Exception:
                     pass
 

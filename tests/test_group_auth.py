@@ -21,7 +21,10 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import protocol  # noqa: E402
-from protocol import CMD_GROUP_SEND, MAX_LABEL_LEN, b32encode, chunk_string  # noqa: E402
+from protocol import (  # noqa: E402
+    CMD_GROUP_SEND, CMD_GROUP_INVITE, CMD_GROUP_POLL,
+    MAX_LABEL_LEN, b32encode, chunk_string,
+)
 from crypto_utils import encrypt, build_signed  # noqa: E402
 from server import RelayServer  # noqa: E402
 from transport import UDPTransport  # noqa: E402
@@ -143,6 +146,33 @@ def main():
         bob.group_keys.pop(gid2, None)
         bob.fetch_groups()
         check('replayed cross-group key blob is rejected', gid2 not in bob.group_keys)
+
+        # ── G3: forged 'inviter' claim is rejected (relay-level auth) ───
+        # Pre-fix, _h_ginvite trusted the claimed inviter name with only a
+        # membership check (no proof of key ownership) — anyone could invite
+        # arbitrary users into a group "as" any existing member. Mallory (a
+        # real member of secretroom, but not alice) tries to invite 'eve'
+        # while claiming to be alice, with a garbage signature.
+        garbage_sig_b32 = b32encode(b'\x00' * 64)
+        fake_key_b32 = b32encode(b'irrelevant-key-bytes')
+        labels = [CMD_GROUP_INVITE, gid, 'alice', 'eve'] + chunk_string(
+            garbage_sig_b32 + fake_key_b32, MAX_LABEL_LEN)
+        resp = mallory._q(labels)
+        check('forged-inviter ginvite is rejected', resp.startswith('ERR'))
+        with srv.lock:
+            check('eve was never added as a member', 'eve' not in srv.groups[gid]['members'])
+
+        # ── G3: forged 'user' claim on gpoll is rejected ────────────────
+        # Pre-fix, _h_gpoll trusted the claimed polling user with only a
+        # membership check — anyone could mark bob's group messages "read"
+        # on his behalf (delivery theft) without proving they are bob.
+        alice.send_group(gid, 'second sortie')
+        labels = [CMD_GROUP_POLL, gid, 'bob', '0']   # unsigned, claims to be bob
+        resp = mallory._q(labels)
+        check('forged-user gpoll is rejected', resp.startswith('ERR'))
+        got = bob.poll_group(gid)
+        second = [m for m in got if m['text'] == 'second sortie']
+        check("bob still receives the message mallory tried to steal-read", len(second) == 1)
 
         sock_stop = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock_stop.sendto(b'stop', ('127.0.0.1', port))

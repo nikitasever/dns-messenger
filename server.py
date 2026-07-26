@@ -29,7 +29,7 @@ from protocol import (
 from crypto_utils import (
     split_bundle, verify_sig,
     poll_signing_input, fpoll_signing_input, glist_signing_input,
-    reg_signing_input,
+    reg_signing_input, gpoll_signing_input, ginvite_signing_input,
 )
 
 # Бандл (X25519||Ed25519) и Ed25519-подпись — оба ровно 64 байта, значит их
@@ -268,11 +268,31 @@ class RelayServer:
         return f'OK:{gid}'
 
     def _h_ginvite(self, L: list[str]) -> str:
-        # i.<group>.<inviter>.<user>.<encrypted_key_labels…>
+        # Легаси (не закреплённый inviter): i.<group>.<inviter>.<user>.<encrypted_key_labels…>
+        # Подписанный (закреплённый inviter):
+        #   i.<group>.<inviter>.<user>.<sig_b32 + encrypted_key_labels…>
         if len(L) < 4:
             return 'ERR:bad_ginvite'
         gid, inviter, user = L[0], L[1], L[2]
-        enc_key_b32 = ''.join(L[3:])
+        with self.lock:
+            inviter_entry = self.users.get(inviter)
+        if inviter_entry and inviter_entry.get('pinned'):
+            # Членство проверяется по имени (см. ниже), но раз имя закреплено за
+            # ключом — требуем подпись, иначе релей мог бы приписать invite
+            # ЛЮБОМУ существующему участнику, не владея его ключом, и раздуть
+            # grp['members'] произвольными именами (см. crypto_utils.ginvite_signing_input).
+            rest = ''.join(L[3:])
+            sig_b32, enc_key_b32 = rest[:BUNDLE_B32_LEN], rest[BUNDLE_B32_LEN:]
+            try:
+                sig = b32decode(sig_b32)
+            except Exception:
+                return 'ERR:auth'
+            _x, ed_pub = split_bundle(inviter_entry['bundle'])
+            if not (len(sig) == 64 and ed_pub and verify_sig(
+                    ed_pub, ginvite_signing_input(gid, inviter, user), sig)):
+                return 'ERR:auth'
+        else:
+            enc_key_b32 = ''.join(L[3:])
         with self.lock:
             grp = self.groups.get(gid)
             if not grp:
@@ -290,6 +310,16 @@ class RelayServer:
             return 'ERR:bad_gsend'
         gid, fr_u, mid = L[0], L[1], L[2]
         seq, total = int(L[3]), int(L[4])
+        # Отправитель заявлен (fr_u), не аутентифицирован — но без проверки
+        # членства ЛЮБОЙ посторонний (даже незнакомый группе) мог бы флудить
+        # group_mail произвольного gid. Подлинность самого содержимого/автора
+        # проверяется на E2E-уровне подписью внутри шифротекста (build_signed);
+        # здесь достаточно закрыть именно ресурс релея — не-член вообще не
+        # проходит.
+        with self.lock:
+            grp = self.groups.get(gid)
+            if not grp or fr_u not in grp['members']:
+                return 'ERR:not_member'
         data = ''.join(L[5:])
         return self._assemble(
             mid, seq, total, data, fr_u, gid,
@@ -298,10 +328,20 @@ class RelayServer:
         )
 
     def _h_gpoll(self, L: list[str]) -> str:
-        # q.<group>.<user>
+        # q.<group>.<user>.0                 — легаси (без подписи)
+        # q.<group>.<user>.<nonce>.<sig_b32…> — подписанный
         if len(L) < 2:
             return 'ERR:bad_gpoll'
         gid, user = L[0], L[1]
+        with self.lock:
+            entry = self.users.get(user)
+        # Без подписи любой мог бы отметить чужие групповые сообщения
+        # прочитанными от имени 'user' (кража доставки) или преждевременно
+        # выбить их из хранилища релея (readers >= members).
+        err = self._authorize_poll(
+            user, entry, L[1:], lambda u, n: gpoll_signing_input(gid, u, n), f'gpoll:{gid}')
+        if err:
+            return err
         with self.lock:
             grp = self.groups.get(gid)
             if not grp:
