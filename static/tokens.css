@@ -39,7 +39,10 @@
     --green:        #4dcd5e;
     --green-glow:   rgba(77, 205, 94, 0.15);
     --orange:       #e8a63a;
+    --orange-glow:  rgba(232, 166, 58, 0.15);
     --red:          #e05d5d;
+    --info:         #4fc3f7;
+    --video:        #3ea6e1;
 
     /* Текст и границы */
     --text:           #f5f5f5;
