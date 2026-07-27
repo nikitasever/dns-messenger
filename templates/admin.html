@@ -7,18 +7,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin — DNS Messenger</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F6E1;</text></svg>">
+    <link rel="stylesheet" href="/static/tokens.css">
+    <script>
+    (function () {
+        try {
+            var root = document.documentElement;
+            var t = localStorage.getItem('dns_set_theme');
+            var a = localStorage.getItem('dns_set_accent');
+            if (t) root.dataset.theme = t;
+            if (a) root.dataset.accent = a;
+            if (localStorage.getItem('dns_set_animations') === 'false') root.classList.add('no-anim');
+        } catch (e) {}
+    })();
+    </script>
     <style>
-        :root { --bg: #0e1621; --card: #17212b; --input: #242f3d; --border: #1f2c3a; --text: #f5f5f5; --muted: #546778; --sec: #8696a7; --accent: #8774e1; --green: #4dcd5e; --red: #e05d5d; --orange: #e8a63a; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-        .topbar { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; gap: 14px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg-deep); color: var(--text); min-height: 100vh; }
+        .topbar { background: var(--bg-sidebar); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; gap: 14px; }
         .topbar h1 { font-size: 18px; flex: 1; }
         .topbar .badge { font-size: 12px; color: var(--green); background: rgba(77,205,94,0.12); padding: 4px 12px; border-radius: 999px; }
-        .topbar button { background: none; border: 1px solid var(--border); color: var(--sec); padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: inherit; }
-        .topbar button:hover { color: var(--text); border-color: var(--sec); }
+        .topbar button { background: none; border: 1px solid var(--border); color: var(--text-secondary); padding: 7px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-family: inherit; }
+        .topbar button:hover { color: var(--text); border-color: var(--text-secondary); }
         .container { max-width: 800px; margin: 24px auto; padding: 0 16px; }
-        .section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
-        .section-title { padding: 14px 20px; font-size: 14px; font-weight: 600; color: var(--sec); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.5px; }
+        .section { background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+        .section-title { padding: 14px 20px; font-size: 14px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.5px; }
         .user-row { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
         .user-row:last-child { border-bottom: none; }
         .user-avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 16px; color: #fff; flex-shrink: 0; }
@@ -29,23 +41,23 @@
         .tag.online { background: rgba(77,205,94,0.12); color: var(--green); }
         .tag.registered { background: rgba(135,116,225,0.12); color: var(--accent); }
         .tag.blocked { background: rgba(224,93,93,0.12); color: var(--red); }
-        .tag.anon { background: rgba(134,150,167,0.1); color: var(--sec); }
+        .tag.anon { background: rgba(134,150,167,0.1); color: var(--text-secondary); }
         .user-actions { display: flex; gap: 6px; }
-        .user-actions button { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: none; color: var(--sec); font-size: 12px; font-family: inherit; font-weight: 500; cursor: pointer; }
-        .user-actions button:hover { border-color: var(--sec); color: var(--text); }
+        .user-actions button { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: none; color: var(--text-secondary); font-size: 12px; font-family: inherit; font-weight: 500; cursor: pointer; }
+        .user-actions button:hover { border-color: var(--text-secondary); color: var(--text); }
         .user-actions button.danger { color: var(--red); }
         .user-actions button.danger:hover { background: rgba(224,93,93,0.1); border-color: var(--red); }
         .user-actions button.success { color: var(--green); }
         .user-actions button.success:hover { background: rgba(77,205,94,0.1); border-color: var(--green); }
-        .empty { padding: 40px; text-align: center; color: var(--muted); }
+        .empty { padding: 40px; text-align: center; color: var(--text-muted); }
         .pw-section { padding: 20px; }
-        .pw-section input { padding: 10px 14px; background: var(--input); border: 1.5px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; width: 200px; margin-right: 8px; }
+        .pw-section input { padding: 10px 14px; background: var(--bg-input); border: 1.5px solid var(--border); border-radius: 8px; color: var(--text); font-size: 14px; font-family: inherit; outline: none; width: 200px; margin-right: 8px; }
         .pw-section input:focus { border-color: var(--accent); }
         .pw-section button { padding: 10px 18px; background: var(--accent); border: none; border-radius: 8px; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
         .msg { font-size: 13px; margin-top: 8px; }
         .msg.ok { color: var(--green); }
         .msg.err { color: var(--red); }
-        .note { padding: 16px 20px; font-size: 13px; color: var(--muted); line-height: 1.5; border-top: 1px solid var(--border); }
+        .note { padding: 16px 20px; font-size: 13px; color: var(--text-muted); line-height: 1.5; border-top: 1px solid var(--border); }
     </style>
 </head>
 <body>

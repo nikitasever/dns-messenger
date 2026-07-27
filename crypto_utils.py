@@ -109,6 +109,20 @@ class Identity:
             pass
 
     @classmethod
+    def from_raw(cls, raw: bytes) -> 'Identity':
+        """Собрать Identity из «сырых» приватных байт (private_bytes()).
+        Общая точка для load() и для любого другого места, куда сырые ключи
+        приходят не с диска (например, восстановленные из кода recovery)."""
+        x_priv = X25519PrivateKey.from_private_bytes(raw[:KEY_LEN])
+        if len(raw) >= 2 * KEY_LEN:
+            ed_priv = Ed25519PrivateKey.from_private_bytes(raw[KEY_LEN:2 * KEY_LEN])
+            return cls(x_priv, ed_priv)
+        # Старый файл только с X25519 — доращиваем Ed25519-ключом. Персист (в т.ч.
+        # апгрейд формата и шифрование) делает вызывающий код, у которого есть
+        # контекст пароля (UserMessenger.__init__).
+        return cls(x_priv)
+
+    @classmethod
     def load(cls, path: str, password: str | None = None) -> 'Identity':
         raw = Path(path).read_bytes()
         if raw.startswith(IDENTITY_MAGIC):
@@ -120,14 +134,7 @@ class Identity:
                 raw = decrypt(ct, _derive_identity_key(password, salt))
             except Exception:
                 raise IdentityLocked('wrong password for the identity file')
-        x_priv = X25519PrivateKey.from_private_bytes(raw[:KEY_LEN])
-        if len(raw) >= 2 * KEY_LEN:
-            ed_priv = Ed25519PrivateKey.from_private_bytes(raw[KEY_LEN:2 * KEY_LEN])
-            return cls(x_priv, ed_priv)
-        # Старый файл только с X25519 — доращиваем Ed25519-ключом. Персист (в т.ч.
-        # апгрейд формата и шифрование) делает вызывающий код, у которого есть
-        # контекст пароля (UserMessenger.__init__).
-        return cls(x_priv)
+        return cls.from_raw(raw)
 
     def derive_shared_key(self, peer_public_bytes: bytes) -> bytes:
         """ECDH → HKDF-SHA256 → 32-байт ключ шифрования."""

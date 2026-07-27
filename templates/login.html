@@ -8,80 +8,91 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DNS Мессенджер</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
+    <link rel="stylesheet" href="/static/tokens.css">
+    <!-- Тема/акцент ставятся синхронно, ДО первой отрисовки — иначе был бы
+         виден мигающий переход тёмная→выбранная тема на каждой загрузке. -->
+    <script>
+    (function () {
+        try {
+            var root = document.documentElement;
+            var t = localStorage.getItem('dns_set_theme');
+            var a = localStorage.getItem('dns_set_accent');
+            if (t) root.dataset.theme = t;
+            if (a) root.dataset.accent = a;
+            if (localStorage.getItem('dns_set_animations') === 'false') root.classList.add('no-anim');
+        } catch (e) {}
+    })();
+    </script>
     <style>
-        :root {
-            --bg: #0e1621; --card: #17212b; --input: #242f3d; --border: #1f2c3a;
-            --text: #f5f5f5; --muted: #546778; --sec: #8696a7;
-            --accent: #8774e1; --accent-light: #a18ef5;
-            --green: #4dcd5e; --red: #e05d5d; --radius: 12px;
-        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* The code-rain background uses white-space:pre lines wider than the
+           viewport, clipped by .dns-code-bg's own overflow:hidden — but a
+           position:fixed descendant that wide can still make the document
+           (<html>) itself scroll horizontally in some engines, bypassing
+           that clip. Belt-and-suspenders on the root, not just body. */
+        html { overflow-x: hidden; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg); color: var(--text); height: 100vh;
+            background: var(--bg-deep); color: var(--text); height: 100vh;
             display: flex; align-items: center; justify-content: center;
             overflow: hidden; -webkit-font-smoothing: antialiased;
-        }
-        body::before {
-            content: ''; position: fixed; inset: 0; pointer-events: none;
-            background: radial-gradient(circle at 25% 35%, rgba(135,116,225,0.06) 0%, transparent 50%),
-                        radial-gradient(circle at 75% 65%, rgba(77,205,94,0.04) 0%, transparent 50%);
+            position: relative;
         }
         .lang-switch {
             position: fixed; top: 16px; right: 18px; z-index: 10;
-            background: var(--card); border: 1px solid var(--border);
-            color: var(--sec); font: inherit; font-size: 13px; font-weight: 600;
+            background: var(--bg-sidebar); border: 1px solid var(--border);
+            color: var(--text-secondary); font: inherit; font-size: 13px; font-weight: 600;
             padding: 8px 14px; border-radius: 20px; cursor: pointer;
             transition: 0.2s; display: flex; align-items: center; gap: 6px;
         }
         .lang-switch:hover { color: var(--text); border-color: var(--accent); transform: translateY(-1px); }
         .login-card {
-            background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+            background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: 16px;
             padding: 40px 36px; width: 420px; max-width: 94vw; text-align: center;
             box-shadow: 0 8px 40px rgba(0,0,0,0.35);
             animation: cardIn 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards;
         }
         @keyframes cardIn { from { opacity:0; transform:scale(0.92) translateY(24px); } to { opacity:1; transform:scale(1) translateY(0); } }
         .logo {
-            width: 90px; height: 90px; background: linear-gradient(135deg,var(--accent),#6c5bbf);
+            width: 90px; height: 90px; background: linear-gradient(135deg,var(--accent),var(--accent-dark));
             border-radius: 50%; display: flex; align-items: center; justify-content: center;
-            font-size: 44px; margin: 0 auto 18px; box-shadow: 0 0 40px rgba(135,116,225,0.25);
+            font-size: 44px; margin: 0 auto 18px; box-shadow: 0 0 40px var(--accent-glow);
             animation: float 4s ease-in-out infinite;
         }
         @keyframes float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-6px); } }
         h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
-        .subtitle { font-size: 14px; color: var(--sec); margin-bottom: 24px; line-height: 1.5; }
+        .subtitle { font-size: 14px; color: var(--text-secondary); margin-bottom: 24px; line-height: 1.5; }
 
         /* Mode tabs */
         .mode-tabs { display: flex; gap: 0; margin-bottom: 22px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
         .mode-tab {
             flex: 1; padding: 10px 8px; font-size: 13px; font-weight: 600; font-family: inherit;
-            border: none; background: var(--input); color: var(--muted); cursor: pointer;
+            border: none; background: var(--bg-input); color: var(--text-muted); cursor: pointer;
             transition: 0.15s;
         }
         .mode-tab + .mode-tab { border-left: 1px solid var(--border); }
         .mode-tab.active { background: var(--accent); color: #fff; }
-        .mode-tab:hover:not(.active) { color: var(--sec); }
+        .mode-tab:hover:not(.active) { color: var(--text-secondary); }
 
         .input-group { margin-bottom: 14px; text-align: left; }
-        .input-group label { display: block; font-size: 13px; font-weight: 500; color: var(--sec); margin-bottom: 6px; }
+        .input-group label { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
         .input-group input {
-            width: 100%; padding: 13px 16px; background: var(--input);
+            width: 100%; padding: 13px 16px; background: var(--bg-input);
             border: 1.5px solid var(--border); border-radius: var(--radius);
             color: var(--text); font-size: 15px; font-family: inherit; outline: none; transition: 0.15s;
         }
         .input-group input:focus { border-color: var(--accent); }
-        .input-group input::placeholder { color: var(--muted); }
-        .input-hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
+        .input-group input::placeholder { color: var(--text-muted); }
+        .input-hint { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
 
         .pw-field { display: none; }
         .pw-field.show { display: block; }
 
         .server-toggle { margin-bottom: 16px; text-align: left; }
-        .server-toggle summary { font-size: 12px; color: var(--muted); cursor: pointer; padding: 4px 0; }
+        .server-toggle summary { font-size: 12px; color: var(--text-muted); cursor: pointer; padding: 4px 0; }
         .server-toggle .fields { display: flex; gap: 8px; margin-top: 8px; }
         .server-toggle input {
-            flex: 1; padding: 10px 14px; background: var(--input);
+            flex: 1; padding: 10px 14px; background: var(--bg-input);
             border: 1.5px solid var(--border); border-radius: 8px;
             color: var(--text); font-size: 13px; font-family: inherit; outline: none;
         }
@@ -99,17 +110,74 @@
         .error-msg { color: var(--red); font-size: 13px; margin-top: 12px; display: none; }
 
         .info-box {
-            font-size: 12px; color: var(--muted); margin-top: 18px; padding-top: 18px;
+            font-size: 12px; color: var(--text-muted); margin-top: 18px; padding-top: 18px;
             border-top: 1px solid var(--border); line-height: 1.6; text-align: left;
         }
         .info-box strong { color: var(--green); }
-        .info-box .anon-info { color: var(--sec); }
+        .info-box .anon-info { color: var(--text-secondary); }
 
         .features-row { display: flex; justify-content: center; gap: 14px; margin-top: 18px; }
-        .feature { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+        .feature { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+
+        /* ── Atmosphere: real protocol traffic scrolling behind the card ──
+           Idea borrowed from a landing-page mockup, but re-themed into our
+           own dark/purple identity (no separate visual identity for the
+           login screen — see design-review notes) and re-scoped to a
+           compact status line instead of a full marketing hero, so the
+           card stays centered and the page never scrolls. */
+        .dns-code-bg {
+            position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+            font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+            font-size: 12px; line-height: 2.2; opacity: 0.5;
+        }
+        .dns-code-stream {
+            position: absolute; top: 0; white-space: pre; will-change: transform;
+            animation: dnsCodeScroll linear infinite;
+        }
+        @keyframes dnsCodeScroll { from { transform: translateY(0); } to { transform: translateY(-50%); } }
+        .dns-grid-overlay {
+            position: fixed; inset: 0; z-index: 1; pointer-events: none;
+            background-image:
+                linear-gradient(var(--border) 1px, transparent 1px),
+                linear-gradient(90deg, var(--border) 1px, transparent 1px);
+            background-size: 56px 56px; opacity: 0.35;
+        }
+        .dns-scanline {
+            position: fixed; left: 0; right: 0; top: -140px; height: 140px; z-index: 2; pointer-events: none;
+            background: linear-gradient(180deg, transparent, var(--accent-glow) 55%, transparent 90%);
+            animation: dnsScan 9s linear infinite;
+        }
+        @keyframes dnsScan { from { top: -160px; } to { top: 110%; } }
+        .dns-vignette {
+            position: fixed; inset: 0; z-index: 3; pointer-events: none;
+            background: radial-gradient(ellipse at 50% 45%, transparent 35%, var(--bg-deep) 100%);
+        }
+        .login-card, .lang-switch, .dns-status-line { position: relative; z-index: 10; }
+
+        /* Compact relay-status line — replaces the mockup's full terminal
+           card. Backed by a REAL check (/api/relay/status): this is not
+           decoration, it answers the one thing worth knowing before typing
+           a username on a messenger built for hostile networks — can this
+           browser actually reach the relay right now. */
+        .dns-status-line {
+            max-width: 420px; margin: 14px auto 0; text-align: center;
+            font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+            font-size: 12px; color: var(--text-muted); display: flex;
+            align-items: center; justify-content: center; gap: 7px;
+        }
+        .dns-status-dot {
+            width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0;
+            transition: background 0.2s ease;
+        }
+        .dns-status-line.up .dns-status-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+        .dns-status-line.down .dns-status-dot { background: var(--red); }
     </style>
 </head>
 <body>
+    <div class="dns-code-bg" id="dns-code-bg" aria-hidden="true"></div>
+    <div class="dns-grid-overlay" aria-hidden="true"></div>
+    <div class="dns-scanline" aria-hidden="true"></div>
+    <div class="dns-vignette" aria-hidden="true"></div>
     <button class="lang-switch" id="lang-switch" onclick="toggleLang()">&#x1F310; <span id="lang-label">Русский</span></button>
     <div class="login-card">
         <div class="logo">&#x1F310;</div>
@@ -149,12 +217,25 @@
         </form>
 
         <div id="backup-code-box" style="display:none;text-align:left;margin-top:14px">
-            <button type="button" id="backup-code-toggle" style="background:none;border:none;color:var(--sec);font-size:13px;cursor:pointer;padding:0;text-decoration:underline"></button>
+            <button type="button" id="backup-code-toggle" style="background:none;border:none;color:var(--text-secondary);font-size:13px;cursor:pointer;padding:0;text-decoration:underline"></button>
             <div id="backup-code-form" style="display:none;margin-top:10px">
                 <div class="input-group" style="margin-bottom:8px">
                     <input type="text" id="backup-code-input" placeholder="XXXXX-XXXXX" autocomplete="off" style="text-transform:uppercase">
                 </div>
                 <button type="button" class="btn-login" id="backup-code-submit"></button>
+            </div>
+        </div>
+
+        <div id="forgot-pw-box" style="display:none;text-align:left;margin-top:14px">
+            <button type="button" id="forgot-pw-toggle" style="background:none;border:none;color:var(--text-secondary);font-size:13px;cursor:pointer;padding:0;text-decoration:underline"></button>
+            <div id="forgot-pw-form" style="display:none;margin-top:10px">
+                <div class="input-group" style="margin-bottom:8px">
+                    <input type="text" id="recovery-code-input" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" autocomplete="off" style="text-transform:uppercase">
+                </div>
+                <div class="input-group" style="margin-bottom:8px">
+                    <input type="password" id="recovery-new-pw" placeholder="" autocomplete="new-password" minlength="8">
+                </div>
+                <button type="button" class="btn-login" id="forgot-pw-submit"></button>
             </div>
         </div>
 
@@ -166,6 +247,11 @@
             <span class="feature">&#x1F465; <span id="t-feat-groups">Группы</span></span>
             <span class="feature">&#x1F4CE; <span id="t-feat-files">Файлы</span></span>
         </div>
+    </div>
+
+    <div class="dns-status-line" id="dns-status-line">
+        <span class="dns-status-dot"></span>
+        <span id="dns-status-text">···</span>
     </div>
 
     <script>
@@ -188,11 +274,23 @@
                 info_login: 'Вход в зарегистрированный аккаунт. E2E-ключи хранятся на этом устройстве.',
                 feat_dns: 'DNS-туннель', feat_groups: 'Группы', feat_files: 'Файлы',
                 connecting: 'Подключение...', err_conn: 'Сервер недоступен', err_def: 'Ошибка подключения',
+                relay_checking: 'проверка реле…',
+                relay_up: 'реле доступно · {0} мс',
+                relay_down: 'реле недоступно',
                 lang_label: 'Русский',
                 backup_toggle: 'Нет доступа к устройству? Ввести запасной код',
                 backup_submit: 'Войти по коду',
                 backup_checking: 'Проверка…',
                 backup_err: 'Неверный или уже использованный код',
+                forgot_toggle: 'Забыли пароль? Восстановить по коду',
+                recovery_code_ph: 'Код восстановления',
+                new_pw_ph: 'Новый пароль (минимум 8 символов)',
+                forgot_submit: 'Сбросить пароль',
+                forgot_checking: 'Проверка…',
+                forgot_err: 'Неверный код восстановления',
+                forgot_ok: 'Пароль изменён. Новый код восстановления показан ниже — сохраните его, старый больше не работает.',
+                forgot_new_code_title: 'Новый код восстановления',
+                forgot_done: 'Готово, войти',
             },
             en: {
                 title: 'DNS Messenger',
@@ -212,11 +310,23 @@
                 info_login: 'Sign in to a registered account. E2E keys are stored on this device.',
                 feat_dns: 'DNS tunnel', feat_groups: 'Groups', feat_files: 'Files',
                 connecting: 'Connecting...', err_conn: 'Server unavailable', err_def: 'Connection error',
+                relay_checking: 'checking relay…',
+                relay_up: 'relay up · {0} ms',
+                relay_down: 'relay unreachable',
                 lang_label: 'English',
                 backup_toggle: "Lost your device? Use a backup code",
                 backup_submit: 'Sign in with code',
                 backup_checking: 'Checking…',
                 backup_err: 'Invalid or already-used code',
+                forgot_toggle: 'Forgot your password? Recover with a code',
+                recovery_code_ph: 'Recovery code',
+                new_pw_ph: 'New password (min. 8 characters)',
+                forgot_submit: 'Reset password',
+                forgot_checking: 'Checking…',
+                forgot_err: 'Invalid recovery code',
+                forgot_ok: 'Password changed. A new recovery code is shown below — save it, the old one no longer works.',
+                forgot_new_code_title: 'New recovery code',
+                forgot_done: 'Done, sign in',
             },
         };
         let lang = localStorage.getItem('dns_lang') || 'ru';
@@ -244,10 +354,14 @@
             if (document.getElementById('backup-code-box').style.display !== 'none') {
                 set('backup-code-toggle', d.backup_toggle);
             }
+            set('forgot-pw-toggle', d.forgot_toggle);
+            set('forgot-pw-submit', d.forgot_submit);
             document.getElementById('username').placeholder = d.user_ph;
             document.getElementById('password').placeholder = d.pw_ph;
             document.getElementById('server-ip').placeholder = d.server_ip_ph;
             document.getElementById('server-port').placeholder = d.server_port_ph;
+            document.getElementById('recovery-code-input').placeholder = d.recovery_code_ph;
+            document.getElementById('recovery-new-pw').placeholder = d.new_pw_ph;
             // Refresh mode-dependent text
             setMode(mode);
         }
@@ -256,6 +370,7 @@
             lang = lang === 'ru' ? 'en' : 'ru';
             localStorage.setItem('dns_lang', lang);
             applyLang();
+            if (window.dnsRenderStatus) window.dnsRenderStatus();
         }
 
         let mode = 'anonymous';
@@ -288,6 +403,14 @@
                 pwHint.textContent = d.pw_hint_login;
                 btn.textContent = d.btn_login;
                 info.innerHTML = '<strong>&#x1F512;</strong> ' + d.info_login;
+            }
+
+            const forgotBox = document.getElementById('forgot-pw-box');
+            if (m === 'login') {
+                forgotBox.style.display = 'block';
+            } else {
+                forgotBox.style.display = 'none';
+                document.getElementById('forgot-pw-form').style.display = 'none';
             }
         }
 
@@ -387,7 +510,144 @@
             }
         });
 
+        document.getElementById('forgot-pw-toggle').addEventListener('click', () => {
+            const form = document.getElementById('forgot-pw-form');
+            form.style.display = form.style.display === 'none' ? 'block' : 'none';
+            if (form.style.display === 'block') document.getElementById('recovery-code-input').focus();
+        });
+
+        document.getElementById('forgot-pw-submit').addEventListener('click', async () => {
+            const d = T();
+            const submitBtn = document.getElementById('forgot-pw-submit');
+            const errEl = document.getElementById('error-msg');
+            const username = document.getElementById('username').value.trim();
+            const recoveryCode = document.getElementById('recovery-code-input').value.trim();
+            const newPassword = document.getElementById('recovery-new-pw').value;
+            errEl.style.display = 'none';
+            if (!username || !recoveryCode || newPassword.length < 8) return;
+            submitBtn.disabled = true;
+            const orig = submitBtn.textContent;
+            submitBtn.textContent = d.forgot_checking;
+            try {
+                const res = await fetch('/api/recovery/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, code: recoveryCode, new_password: newPassword }),
+                }).then(r => r.json());
+                if (res.ok) {
+                    document.getElementById('recovery-code-input').value = '';
+                    document.getElementById('recovery-new-pw').value = '';
+                    document.getElementById('forgot-pw-form').style.display = 'none';
+                    showNewRecoveryCode(res.code, d);
+                } else {
+                    errEl.textContent = res.error || d.forgot_err;
+                    errEl.style.display = 'block';
+                }
+            } catch (e) {
+                errEl.textContent = d.err_conn;
+                errEl.style.display = 'block';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = orig;
+            }
+        });
+
+        // Показывает НОВЫЙ код восстановления, выпущенный взамен только что
+        // потраченного (recovery — одноразовый). Показывается ровно один раз,
+        // как и сам сброс пароля — второй раз с сервера его не получить.
+        function showNewRecoveryCode(code, d) {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px';
+            overlay.innerHTML =
+                '<div style="background:var(--bg-sidebar);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:420px;width:100%;text-align:left">' +
+                '<h3 style="margin-bottom:10px">' + d.forgot_new_code_title + '</h3>' +
+                '<p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;line-height:1.5">' + d.forgot_ok + '</p>' +
+                '<pre style="background:var(--bg-input);padding:12px;border-radius:8px;font-size:16px;letter-spacing:1px;text-align:center;user-select:all;white-space:pre-wrap">' + code + '</pre>' +
+                '<button class="btn-login" style="margin-top:14px" id="recovery-done-btn">' + d.forgot_done + '</button>' +
+                '</div>';
+            document.body.appendChild(overlay);
+            document.getElementById('recovery-done-btn').addEventListener('click', () => {
+                window.location.href = '/';
+            });
+        }
+
         applyLang();
+
+        // ── Background atmosphere: real protocol traffic, not invented text.
+        // Every line below is something this exact codebase actually sends or
+        // receives (see protocol.py / crypto_utils.py / server.py) — no
+        // fictional domains, no cryptographic properties we don't actually
+        // have (this app does NOT do forward secrecy: derive_shared_key() is
+        // static-static ECDH on long-term identity keys, so that claim never
+        // appears here even for atmosphere).
+        (function () {
+            var LINES = [
+                'r.alice.qzk3f9x2...  REG_SIG_CONTEXT=dnsmsg-reg-v1',
+                'p.alice.9fk2xq.1721836800.<ed25519 sig>  (signed poll, dm)',
+                'MSG:bob:nq3f8...ct  ->  ChaCha20-Poly1305.decrypt(shared)',
+                'X25519.exchange(priv, peer_pub) -> HKDF-SHA256 -> 32B key',
+                'q.chat42.bob.k3n8p.1721836801.<sig>  (signed gpoll)',
+                'GMSG:alice:9d2fa...  EMPTY  ERR:replay  ERR:auth',
+                'g.chat42.alice.a91fd.0.3.<data>  (group chunk 0/3)',
+                'seal_group_key(gk, identity, peer_pub) [AAD=gid]',
+                'l.alice.9fk2xq.1721836800.<sig>  GLIST_SIG_CONTEXT',
+                'h.bob.alice.f3ac.<name_b32>.153600.12  (file header)',
+                'x.9f1c2e.0  ->  FDATA:0:12:<b32 chunk>',
+                'Ed25519.verify(bundle[32:64], ctx+pt, sig) -> verified',
+                'DROP malformed label len>63  RFC1035 guard',
+                'domain=msg.tunnel.local  type=TXT  class=IN',
+                'POLL_TS_WINDOW=120s  seen_poll_nonces[user] dedup',
+                'scrypt(N=2^17, r=8, p=1) -> identity file key',
+            ];
+
+            var bg = document.getElementById('dns-code-bg');
+            if (bg) {
+                var cols = Math.max(4, Math.floor(window.innerWidth / 220));
+                for (var c = 0; c < cols; c++) {
+                    var stream = document.createElement('div');
+                    stream.className = 'dns-code-stream';
+                    stream.style.left = (c * (100 / cols)) + '%';
+                    stream.style.color = 'var(--text-muted)';
+                    stream.style.animationDuration = (30 + (c % 5) * 9) + 's';
+                    stream.style.animationDelay = (-(c * 7.3)) + 's';
+                    var text = '';
+                    for (var r = 0; r < 2; r++)   // duplicated for a seamless -50% loop
+                        for (var i = 0; i < 30; i++) text += LINES[(i + c * 3) % LINES.length] + '\n';
+                    stream.textContent = text;
+                    bg.appendChild(stream);
+                }
+            }
+
+            // Real relay check — not a fixed decorative number. Polls gently
+            // (30s) so a login screen left open doesn't itself become a
+            // steady drip against the rate limit meant for abuse, not us.
+            var statusLine = document.getElementById('dns-status-line');
+            var statusText = document.getElementById('dns-status-text');
+            var lastResult = null;   // relabel on language switch without re-polling
+            function renderStatus() {
+                var d = T();
+                if (!lastResult) { statusText.textContent = d.relay_checking; return; }
+                statusText.textContent = lastResult.ok
+                    ? d.relay_up.replace('{0}', lastResult.latency_ms)
+                    : d.relay_down;
+            }
+            function checkRelay() {
+                statusLine.classList.remove('up', 'down');
+                renderStatus();
+                fetch('/api/relay/status').then(function (r) { return r.json(); }).then(function (res) {
+                    lastResult = res;
+                    statusLine.classList.add(res.ok ? 'up' : 'down');
+                    renderStatus();
+                }).catch(function () {
+                    lastResult = { ok: false };
+                    statusLine.classList.add('down');
+                    renderStatus();
+                });
+            }
+            window.dnsRenderStatus = renderStatus;
+            checkRelay();
+            setInterval(checkRelay, 30000);
+        })();
     </script>
 </body>
 </html>

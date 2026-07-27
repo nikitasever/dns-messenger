@@ -11,7 +11,23 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>DNS Мессенджер</title>
     <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/tokens.css">
     <link rel="stylesheet" href="/static/style.css">
+    <!-- Тема/акцент ставятся синхронно, ДО первой отрисовки: app.js грузится
+         в конце body и применил бы их только после полного парсинга страницы —
+         был бы виден мигающий переход тёмная→выбранная тема на каждой загрузке. -->
+    <script>
+    (function () {
+        try {
+            var root = document.documentElement;
+            var t = localStorage.getItem('dns_set_theme');
+            var a = localStorage.getItem('dns_set_accent');
+            if (t) root.dataset.theme = t;
+            if (a) root.dataset.accent = a;
+            if (localStorage.getItem('dns_set_animations') === 'false') root.classList.add('no-anim');
+        } catch (e) {}
+    })();
+    </script>
     <link rel="apple-touch-icon" href="/static/icon-192.png">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F310;</text></svg>">
 </head>

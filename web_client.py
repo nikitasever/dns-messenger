@@ -1219,6 +1219,36 @@ def _ownership_proof(name):
     return Response('not found\n', status=404, mimetype='text/plain')
 
 
+@app.route('/api/relay/status')
+def api_relay_status():
+    """Реальная (не декоративная) проверка живости реле для экрана входа —
+    один дешёвый getkey-запрос на заведомо несуществующее имя, с замером
+    фактической задержки round-trip. Неаутентифицирован по необходимости
+    (полезен ИМЕННО до входа), поэтому — жёсткий rate limit per-IP: иначе
+    HTTP-флуд на этот роут превращается в бесплатный UDP-флуд нашего же
+    реле (тот же класс проблемы, что и amplification, только жертва — мы
+    сами, а не третья сторона).
+    """
+    if rate_limited(f'relay-status:{client_ip()}', max_attempts=20, window_seconds=60.0):
+        return jsonify({'ok': False, 'error': 'rate_limited'}), 429
+    if transport is None:
+        return jsonify({'ok': False})
+    started = time.time()
+    try:
+        res = transport.query([CMD_GETKEY, '__relay_status_probe__'])
+    except Exception:
+        return jsonify({'ok': False})
+    latency_ms = round((time.time() - started) * 1000)
+    # Белый, не чёрный список: getkey на несуществующее имя УСПЕШНО отвечает
+    # 'ERR:not_found' — это тоже 'ERR:', но означает «реле живо и ответило»,
+    # а не «не достучались». Любой другой ответ (таймаут/нет транспорта/
+    # текст исключения DoH) означает реальную проблему связи — их безопаснее
+    # перечислить явно как единственный успех, чем пытаться угадать и
+    # перечислить все возможные строки-неудачи.
+    ok = res == 'ERR:not_found'
+    return jsonify({'ok': ok, 'latency_ms': latency_ms})
+
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
     if rate_limited(f'login:{client_ip()}', max_attempts=10, window_seconds=60.0):
