@@ -9,6 +9,7 @@
 """
 
 import os
+import shutil
 import threading
 import time
 import json
@@ -41,7 +42,8 @@ from transport import UDPTransport, DoHTransport, MultiTransport
 from protocol import (
     CMD_REGISTER, CMD_GETKEY, CMD_SEND, CMD_POLL,
     CMD_GROUP_CREATE, CMD_GROUP_INVITE, CMD_GROUP_SEND,
-    CMD_GROUP_POLL, CMD_GROUP_LIST,
+    CMD_GROUP_POLL, CMD_GROUP_LIST, CMD_GROUP_LEAVE, CMD_GROUP_KICK,
+    CMD_GROUP_MEMBERS,
     CMD_FILE_HEADER, CMD_FILE_CHUNK, CMD_FILE_POLL, CMD_FILE_DOWNLOAD,
     CMD_LIST_USERS,
     MAX_LABEL_LEN, MAX_DOMAIN_LEN, NONCE_OVERHEAD,
@@ -53,6 +55,14 @@ from crypto_utils import (
     split_bundle, build_signed, open_signed,
     poll_signing_input, fpoll_signing_input, glist_signing_input,
     reg_signing_input, gpoll_signing_input, ginvite_signing_input,
+    gleave_signing_input, gkick_signing_input, gmembers_signing_input,
+    _derive_identity_key, safety_number, format_safety_number,
+)
+from ratchet import (
+    RatchetSession, RatchetError,
+    generate_prekey_pair, prekey_public_bytes, prekey_private_bytes,
+    prekey_from_private_bytes, sign_prekey, x3dh_initiate, x3dh_respond,
+    ratchet_storage_key,
 )
 
 app = Flask(__name__)
@@ -322,6 +332,97 @@ def consume_backup_code(username: str, code: str) -> bool:
         return False
 
 
+# ── Account recovery (пароль забыт целиком) ─────────────────────────────
+# Пароль аккаунта — это ещё и ключ шифрования identity-файла (см.
+# UserMessenger.__init__), поэтому backup-коды 2FA тут не годятся: они лишь
+# ПОДТВЕРЖДАЮТ личность после уже введённого пароля, а не расшифровывают
+# ничего. Код восстановления обязан САМ БЫТЬ ключом: это второй scrypt-wrap
+# тех же сырых приватных байт (identity.private_bytes()), под ключом,
+# выведенным из recovery-кода тем же способом (_derive_identity_key), и
+# хранится рядом с identity.key как identity.recovery. Сервер никогда не
+# хранит сам код — только шифротекст; поэтому проверка «код верный?» — это
+# попытка расшифровать, а не сравнение с хэшем.
+RECOVERY_CODE_LEN = 24  # 24 симв. из 31-буквенного алфавита ≈ 119 бит энтропии
+
+
+def _recovery_file(username: str) -> Path:
+    return Path(f'.messenger_{username}') / 'identity.recovery'
+
+
+def _gen_recovery_code() -> str:
+    return ''.join(secrets.choice(BACKUP_CODE_ALPHABET) for _ in range(RECOVERY_CODE_LEN))
+
+
+def _format_recovery_code(code: str) -> str:
+    return '-'.join(code[i:i + 4] for i in range(0, len(code), 4))
+
+
+def has_recovery_code(username: str) -> bool:
+    return _recovery_file(username).exists()
+
+
+def generate_recovery_code(username: str, identity: Identity) -> str:
+    """Генерирует НОВЫЙ код восстановления, безвозвратно затирая старый —
+    старый код (даже неиспользованный) после этого расшифровать identity
+    больше не сможет. Возвращает код в открытом виде РОВНО ОДИН РАЗ; на диск
+    попадает только шифротекст сырых ключей под ним."""
+    code = _gen_recovery_code()
+    salt = os.urandom(16)
+    raw = identity.private_bytes()
+    blob = salt + encrypt(raw, _derive_identity_key(code, salt))
+    path = _recovery_file(username)
+    path.parent.mkdir(exist_ok=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(blob)
+    try:
+        os.chmod(str(path), 0o600)
+    except OSError:
+        pass
+    return _format_recovery_code(code)
+
+
+def purge_username_data(username: str):
+    """Стирает ВСЕ данные, привязанные к нику: identity.key, код
+    восстановления, TOFU-пины (весь .messenger_<user>/), passkeys, backup-коды
+    и фото профиля. Без этого удалённый ник нельзя безопасно отдать заново —
+    новый человек с тем же ником унаследовал бы чужой зашифрованный identity
+    (и не смог бы вообще зарегистрироваться: UserMessenger пытался бы
+    расшифровать ЧУЖОЙ identity.key своим новым паролем и падал с
+    IdentityLocked) или, того хуже, старый passkey/recovery-код продолжал бы
+    формально числиться на этот ник."""
+    shutil.rmtree(f'.messenger_{username}', ignore_errors=True)
+    with webauthn_lock:
+        wa = _load_json(WEBAUTHN_FILE)
+        if wa.pop(username, None) is not None:
+            _save_json(WEBAUTHN_FILE, wa)
+        bc = _load_json(BACKUP_CODES_FILE)
+        if bc.pop(username, None) is not None:
+            _save_json(BACKUP_CODES_FILE, bc)
+    profiles = get_profiles()
+    if profiles.pop(username, None) is not None:
+        _save_json(PROFILES_FILE, profiles)
+
+
+def consume_recovery_code(username: str, code: str) -> Identity | None:
+    """Пробует расшифровать сохранённые сырые ключи кодом восстановления.
+    Успех/неудача видны только по тому, расшифровалось ли — сам код нигде
+    не хранится, сравнивать не с чем."""
+    normalized = re.sub(r'[\s-]', '', code.strip().upper())
+    if not normalized:
+        return None
+    path = _recovery_file(username)
+    if not path.exists():
+        return None
+    try:
+        blob = path.read_bytes()
+        salt, ct = blob[:16], blob[16:]
+        raw = decrypt(ct, _derive_identity_key(normalized, salt))
+        return Identity.from_raw(raw)
+    except Exception:
+        return None
+
+
 def webauthn_rp():
     """(rp_id, origin) для текущего запроса. rp_id обязан быть доменом БЕЗ
     порта и совпадать между регистрацией и логином passkey — иначе браузер
@@ -513,6 +614,262 @@ def _is_transient_err(res: str) -> bool:
         s in res for s in ('timeout', 'no_response', 'no_transport'))
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Prekeys для X3DH (docs/ratchet-plan.md, фаза 1) — только для личных чатов
+# зарегистрированных аккаунтов. Анонимный режим (никакого персистентного
+# пароля/identity) остаётся на легаси-статической ECDH-схеме, см. send_dm.
+#
+# Приватная половина (signed prekey + пул one-time prekeys) хранится в
+# .messenger_<user>/prekeys.key, зашифрованная паролем аккаунта той же схемой,
+# что и identity.key (scrypt + ChaCha20-Poly1305) — переиспользуем
+# _derive_identity_key, не изобретаем новый формат.
+#
+# Публичные бандлы (то, что рассылается желающим написать этому пользователю)
+# лежат открытым текстом в PREKEY_FILE — как и профили/webauthn-креды, это не
+# секрет, секрет — только приватные половины.
+#
+# ВАЖНО: пароль нигде не хранится дольше момента логина (см. Identity.load) —
+# поэтому prekeys.key может быть (пере)записан ТОЛЬКО в UserMessenger.__init__
+# (там, где пароль ещё жив), а не из отдельного authenticated-эндпоинта уже
+# после логина. Публикация/пополнение пула — часть __init__, отдельного
+# /api/prekeys/publish не нужно; сам X3DH-обмен бандлами — внутренняя
+# серверная бухгалтерия между send_dm/_decrypt_from и PREKEY_FILE, браузеру
+# тут вообще нечего вызывать напрямую.
+PREKEY_FILE = Path('.messenger_prekeys.json')
+prekey_lock = threading.Lock()
+ONE_TIME_PREKEY_POOL_TARGET = 50
+ONE_TIME_PREKEY_REPLENISH_THRESHOLD = 10
+SIGNED_PREKEY_ROTATE_AFTER = 7 * 86400.0   # 7 дней
+PREKEY_MAGIC = b'PKENC1\n'
+
+RATCHET_SCHEME_LEGACY_STATIC = 0    # старая статическая ECDH — аноним и фолбэк
+RATCHET_SCHEME_RATCHET_INIT = 1     # первое сообщение сессии: несёт X3DH-данные
+RATCHET_SCHEME_RATCHET_CONT = 2     # продолжение уже установленной ratchet-сессии
+
+
+def _pack_ratchet_init(ephemeral_pub: bytes, one_time_pub: bytes | None, ratchet_ct: bytes) -> bytes:
+    """scheme(1) || ephemeral_pub(32) || has_otpk(1) || otpk_pub(32, нули если
+    has_otpk=0) || ratchet_ct. otpk_pub всегда занимает те же 32 байта —
+    отдельный флаг has_otpk честнее, чем «все нули = отсутствует» (валидный
+    X25519-ключ технически МОГ бы совпасть с нулями, пусть и с исчезающей
+    вероятностью)."""
+    has_otpk = one_time_pub is not None
+    otpk_field = one_time_pub if has_otpk else (b'\x00' * KEY_LEN)
+    return (bytes([RATCHET_SCHEME_RATCHET_INIT]) + ephemeral_pub
+            + bytes([1 if has_otpk else 0]) + otpk_field + ratchet_ct)
+
+
+def _unpack_ratchet_init(body: bytes) -> tuple[bytes, bytes | None, bytes]:
+    ephemeral_pub = body[:KEY_LEN]
+    has_otpk = body[KEY_LEN] == 1
+    otpk_pub = body[KEY_LEN + 1: KEY_LEN + 1 + KEY_LEN] if has_otpk else None
+    ratchet_ct = body[KEY_LEN + 1 + KEY_LEN:]
+    return ephemeral_pub, otpk_pub, ratchet_ct
+
+
+def _pack_ratchet_continue(ratchet_ct: bytes) -> bytes:
+    return bytes([RATCHET_SCHEME_RATCHET_CONT]) + ratchet_ct
+
+
+def _prekey_priv_file(username: str) -> Path:
+    return Path(f'.messenger_{username}') / 'prekeys.key'
+
+
+def save_prekey_store(username: str, password: str, store: dict):
+    """store: {'signed_priv': X25519PrivateKey, 'signed_pub': bytes,
+    'signed_sig': bytes, 'signed_ts': float, 'one_time': {pub: priv}}."""
+    payload = json.dumps({
+        'signed_priv': base64.b64encode(prekey_private_bytes(store['signed_priv'])).decode(),
+        'signed_pub': base64.b64encode(store['signed_pub']).decode(),
+        'signed_sig': base64.b64encode(store['signed_sig']).decode(),
+        'signed_ts': store['signed_ts'],
+        'one_time': {
+            base64.b64encode(pub).decode(): base64.b64encode(prekey_private_bytes(priv)).decode()
+            for pub, priv in store['one_time'].items()
+        },
+    }).encode('utf-8')
+    salt = os.urandom(16)
+    blob = PREKEY_MAGIC + salt + encrypt(payload, _derive_identity_key(password, salt))
+    path = _prekey_priv_file(username)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(blob)
+    try:
+        os.chmod(str(path), 0o600)
+    except OSError:
+        pass
+
+
+def load_prekey_store(username: str, password: str) -> dict | None:
+    path = _prekey_priv_file(username)
+    if not path.exists():
+        return None
+    raw = path.read_bytes()
+    if not raw.startswith(PREKEY_MAGIC):
+        return None
+    body = raw[len(PREKEY_MAGIC):]
+    salt, ct = body[:16], body[16:]
+    try:
+        payload = json.loads(decrypt(ct, _derive_identity_key(password, salt)))
+    except Exception:
+        return None
+    return {
+        'signed_priv': prekey_from_private_bytes(base64.b64decode(payload['signed_priv'])),
+        'signed_pub': base64.b64decode(payload['signed_pub']),
+        'signed_sig': base64.b64decode(payload['signed_sig']),
+        'signed_ts': payload['signed_ts'],
+        'one_time': {
+            base64.b64decode(pub_b64): prekey_from_private_bytes(base64.b64decode(priv_b64))
+            for pub_b64, priv_b64 in payload['one_time'].items()
+        },
+    }
+
+
+def bootstrap_or_replenish_prekeys(identity: Identity, existing: dict | None,
+                                    now: float | None = None) -> tuple[dict, bool]:
+    """Возвращает (store, changed). Создаёт signed prekey с нуля, если его ещё
+    нет; ротирует его, если он старше SIGNED_PREKEY_ROTATE_AFTER; доливает
+    one-time prekeys до целевого размера, если пул просел ниже порога.
+    changed=False, только если всё уже было в порядке — тогда вызывающему не
+    нужно ничего дописывать на диск/публиковать заново.
+
+    Известная граница ротации: уже начатый, но ещё не долетевший до нас
+    X3DH-хендшейк, использующий ИМЕННО СТАРЫЙ signed prekey, после ротации
+    декодируется в неверный секрет — сообщение не расшифруется (безопасный,
+    явный отказ, не молчаливая порча), просто придётся отправить заново. Мы
+    сознательно не держим предыдущий signed prekey «ещё валидным» (как
+    рекомендует избегать этого сам Signal-протокол при желании упростить
+    реализацию) — окно (недели между ротациями против секунд на долёт
+    сообщения через DNS-туннель) делает эту границу крайне маловероятной на
+    практике."""
+    now = now if now is not None else time.time()
+    if existing is None:
+        signed_priv = generate_prekey_pair()
+        signed_pub = prekey_public_bytes(signed_priv)
+        store = {
+            'signed_priv': signed_priv,
+            'signed_pub': signed_pub,
+            'signed_sig': sign_prekey(identity, signed_pub),
+            'signed_ts': now,
+            'one_time': {},
+        }
+        changed = True
+    else:
+        store = existing
+        changed = False
+        if now - store['signed_ts'] > SIGNED_PREKEY_ROTATE_AFTER:
+            signed_priv = generate_prekey_pair()
+            signed_pub = prekey_public_bytes(signed_priv)
+            store['signed_priv'] = signed_priv
+            store['signed_pub'] = signed_pub
+            store['signed_sig'] = sign_prekey(identity, signed_pub)
+            store['signed_ts'] = now
+            changed = True
+    if len(store['one_time']) < ONE_TIME_PREKEY_REPLENISH_THRESHOLD:
+        to_add = ONE_TIME_PREKEY_POOL_TARGET - len(store['one_time'])
+        for _ in range(max(to_add, 0)):
+            otk = generate_prekey_pair()
+            store['one_time'][prekey_public_bytes(otk)] = otk
+        changed = True
+    return store, changed
+
+
+def get_prekey_bundles() -> dict:
+    return _load_json(PREKEY_FILE)
+
+
+def publish_prekey_bundle(username: str, store: dict):
+    """Публикует/обновляет публичную часть бандла. Не трогает one-time
+    prekeys, которые уже были опубликованы и ещё не разобраны — только
+    добавляет новые (см. bootstrap_or_replenish_prekeys), поэтому re-publish
+    не аннулирует уже выданные, но ещё не потреблённые one-time ключи."""
+    with prekey_lock:
+        data = get_prekey_bundles()
+        already_public = set()
+        if username in data:
+            already_public = {base64.b64decode(p) for p in data[username].get('one_time', [])}
+        all_pub = set(store['one_time'].keys()) | already_public
+        data[username] = {
+            'signed_pub': base64.b64encode(store['signed_pub']).decode(),
+            'signed_sig': base64.b64encode(store['signed_sig']).decode(),
+            'signed_ts': store['signed_ts'],
+            'one_time': [base64.b64encode(p).decode() for p in all_pub],
+        }
+        _save_json(PREKEY_FILE, data)
+
+
+def take_prekey_bundle(username: str) -> dict | None:
+    """Отдаёт публичный бандл получателя и АТОМАРНО забирает (удаляет из
+    пула) один one-time prekey, если он ещё был в запасе — иначе отдаёт
+    бандл без него (X3DH проходит и так, просто без DH4-компоненты)."""
+    with prekey_lock:
+        data = get_prekey_bundles()
+        entry = data.get(username)
+        if not entry:
+            return None
+        one_time_pub = None
+        if entry['one_time']:
+            one_time_pub = entry['one_time'].pop(0)
+            _save_json(PREKEY_FILE, data)
+        return {
+            'signed_pub': base64.b64decode(entry['signed_pub']),
+            'signed_sig': base64.b64decode(entry['signed_sig']),
+            'one_time_pub': base64.b64decode(one_time_pub) if one_time_pub else None,
+        }
+
+
+# ── Персистентность ratchet-состояния (docs/ratchet-plan.md, фаза 2) ────
+# Один файл на пару собеседников — .messenger_<user>/ratchet_<peer>.state,
+# зашифрован ключом из ratchet_storage_key() (выведен из УЖЕ расшифрованной
+# identity, не из пароля напрямую — см. докстринг ratchet_storage_key).
+# Загружается целиком в UserMessenger.__init__, дозаписывается после каждого
+# encrypt/decrypt через send_dm/_decrypt_from — так рестарт сервера (у вас
+# частые деплои) больше не рвёт активные секретные переписки.
+
+def _ratchet_state_file(username: str, peer: str) -> Path:
+    return Path(f'.messenger_{username}') / f'ratchet_{peer}.state'
+
+
+def save_ratchet_state(username: str, peer: str, storage_key: bytes, session: RatchetSession):
+    payload = json.dumps(session.to_dict()).encode('utf-8')
+    blob = encrypt(payload, storage_key)
+    path = _ratchet_state_file(username, peer)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'wb') as f:
+        f.write(blob)
+    try:
+        os.chmod(str(path), 0o600)
+    except OSError:
+        pass
+
+
+def load_ratchet_state(username: str, peer: str, storage_key: bytes) -> RatchetSession | None:
+    path = _ratchet_state_file(username, peer)
+    if not path.exists():
+        return None
+    try:
+        payload = decrypt(path.read_bytes(), storage_key)
+        return RatchetSession.from_dict(json.loads(payload))
+    except Exception:
+        # Испорченный/чужой файл (или сменился storage_key, чего в норме не
+        # бывает) — не роняем логин, просто эта сессия начнётся с нуля через
+        # X3DH при следующем сообщении, как если бы файла не было вовсе.
+        return None
+
+
+def load_all_ratchet_states(username: str, storage_key: bytes) -> dict[str, 'RatchetSession']:
+    data_dir = Path(f'.messenger_{username}')
+    result = {}
+    if not data_dir.exists():
+        return result
+    for f in data_dir.glob('ratchet_*.state'):
+        peer = f.stem[len('ratchet_'):]
+        session = load_ratchet_state(username, peer, storage_key)
+        if session is not None:
+            result[peer] = session
+    return result
+
+
 class UserMessenger:
     def __init__(self, username: str, transport, password: str | None = None,
                  persist_identity: bool = True):
@@ -535,9 +892,18 @@ class UserMessenger:
             self.peer_verify: dict[str, bytes] = {}
             self.group_keys: dict[str, bytes] = {}
             self.groups: dict[str, dict] = {}
+            self._group_key_applied: dict[str, str] = {}
+            self._group_last_members: dict[str, set] = {}
             self._pins_file = None
             self._pins: dict[str, str] = {}
             self.key_alerts: set[str] = set()
+            # Аноним не персистит пароль/identity — значит и prekeys/ratchet
+            # (X3DH требует identity, подписывающий signed prekey, устойчивую
+            # между сессиями) для него не имеют смысла. Личные сообщения с/от
+            # анонима остаются на легаси-статической ECDH-схеме (см. send_dm).
+            self.prekeys = None
+            self.ratchets: dict[str, RatchetSession] = {}
+            self._ratchet_key = None
             return
 
         data_dir = Path(f'.messenger_{username}')
@@ -565,6 +931,8 @@ class UserMessenger:
         self.peer_verify: dict[str, bytes] = {}    # user → Ed25519 (для подписи)
         self.group_keys: dict[str, bytes] = {}
         self.groups: dict[str, dict] = {}
+        self._group_key_applied: dict[str, str] = {}
+        self._group_last_members: dict[str, set] = {}
 
         # TOFU-пиннинг: бандл ключей пира, увиденный при первом контакте.
         # Если сервер позже отдаёт другой ключ под тем же именем — это подмена
@@ -572,6 +940,29 @@ class UserMessenger:
         self._pins_file = data_dir / 'pins.json'
         self._pins: dict[str, str] = _load_json(self._pins_file)  # user → bundle_b32
         self.key_alerts: set[str] = set()          # пиры со сменившимся ключом
+
+        # Prekeys для X3DH (docs/ratchet-plan.md) — переиспользуем/пополняем
+        # тут же, а не из отдельного эндпоинта: пароль дальше нигде не хранится
+        # (см. Identity.load), поэтому re-encrypt prekeys.key возможен ТОЛЬКО
+        # здесь, пока он ещё жив.
+        self.prekeys = None
+        if password:
+            existing_prekeys = load_prekey_store(username, password)
+            store, changed = bootstrap_or_replenish_prekeys(self.identity, existing_prekeys)
+            self.prekeys = store
+            if changed:
+                save_prekey_store(username, password, store)
+            publish_prekey_bundle(username, store)
+
+        # Ratchet-состояние (docs/ratchet-plan.md, фаза 2) — ключ шифрования
+        # выводится из уже расшифрованной identity (не из пароля напрямую),
+        # поэтому доступен всё время жизни объекта и переживает то, что пароль
+        # нигде дальше не хранится. Существующие сессии подхватываются с диска
+        # сразу тут — рестарт сервера их больше не рвёт.
+        self._ratchet_key = ratchet_storage_key(self.identity) if self.prekeys else None
+        self.ratchets: dict[str, RatchetSession] = (
+            load_all_ratchet_states(username, self._ratchet_key) if self._ratchet_key else {}
+        )
 
     def _q(self, labels):
         return self.transport.query(labels)
@@ -660,14 +1051,62 @@ class UserMessenger:
             self.get_peer_key(user)   # подтягивает и пиннит бандл
         return self.peer_verify.get(user)
 
+    def _persist_ratchet(self, peer: str, session: RatchetSession):
+        """Дозаписывает ratchet-состояние на диск после КАЖДОГО encrypt/decrypt
+        (не батчем раз в N сообщений) — если бы состояние отставало от того,
+        что реально ушло/пришло, рестарт между записями откатывал бы сессию
+        к устаревшей точке, а не терял бы её целиком: пропущенные ключи
+        цепочки за это время это переживут (skipped-key механизм на то и
+        сделан), но проще и надёжнее вообще не создавать это окно."""
+        if self._ratchet_key is not None:
+            save_ratchet_state(self.username, peer, self._ratchet_key, session)
+
     def send_dm(self, to_user: str, text: str) -> dict:
         pk = self.get_peer_key(to_user)
         if not pk:
             return {'ok': False, 'error': f'User "{to_user}" not online. Must sign in first.'}
-        shared = self.identity.derive_shared_key(pk)
         ctx = self.username.encode('utf-8') + b'\x00' + to_user.encode('utf-8')
         signed = build_signed(self.identity, ctx, text.encode('utf-8'))
-        ct = encrypt(signed, shared)
+
+        # Double Ratchet, если у нас самих есть prekeys (не аноним) и уже
+        # установлена сессия с этим пиром, ИЛИ мы можем её сейчас установить
+        # (у пира есть опубликованный бандл). Иначе — легаси-статическая
+        # ECDH-схема ниже, без forward secrecy (docs/ratchet-plan.md фаза 1:
+        # ratchet покрывает только пары, где ОБЕ стороны его поддерживают).
+        session = self.ratchets.get(to_user)
+        if session is None and self.prekeys is not None:
+            bundle = take_prekey_bundle(to_user)
+            peer_verify = self.peer_verify.get(to_user)
+            if bundle is not None and peer_verify is not None:
+                try:
+                    ephemeral = generate_prekey_pair()
+                    shared_secret = x3dh_initiate(
+                        self.identity, ephemeral,
+                        peer_identity_pub=pk, peer_verify_pub=peer_verify,
+                        peer_signed_prekey_pub=bundle['signed_pub'],
+                        peer_signed_prekey_sig=bundle['signed_sig'],
+                        peer_one_time_prekey_pub=bundle['one_time_pub'],
+                    )
+                    session = RatchetSession.init_initiator(shared_secret, bundle['signed_pub'])
+                    ratchet_ct = session.encrypt(signed)
+                    ct = _pack_ratchet_init(prekey_public_bytes(ephemeral),
+                                             bundle['one_time_pub'], ratchet_ct)
+                    self.ratchets[to_user] = session
+                    self._persist_ratchet(to_user, session)
+                    ok = self._send_chunked(CMD_SEND, [to_user, self.username], ct)
+                    return {'ok': ok, 'error': '' if ok else 'Send error'}
+                except RatchetError:
+                    pass   # бандл/подпись оказались нерабочими — откат ниже
+
+        if session is not None:
+            ratchet_ct = session.encrypt(signed)
+            self._persist_ratchet(to_user, session)
+            ct = _pack_ratchet_continue(ratchet_ct)
+            ok = self._send_chunked(CMD_SEND, [to_user, self.username], ct)
+            return {'ok': ok, 'error': '' if ok else 'Send error'}
+
+        shared = self.identity.derive_shared_key(pk)
+        ct = bytes([RATCHET_SCHEME_LEGACY_STATIC]) + encrypt(signed, shared)
         ok = self._send_chunked(CMD_SEND, [to_user, self.username], ct)
         return {'ok': ok, 'error': '' if ok else 'Send error'}
 
@@ -788,7 +1227,13 @@ class UserMessenger:
             if len(parts) < 3:
                 continue
             gid, key_from, key_data = parts
-            if gid in self.group_keys or not key_data or not key_from:
+            # Фаза 4 (docs/ratchet-plan.md): key_data меняется не только при
+            # первом инвайте, но и при ре-кее после kick/leave (см.
+            # rekey_group) — переприменяем, только когда блок РЕАЛЬНО сменился
+            # относительно того, что мы уже применили, а не всякий раз, когда
+            # gid уже известен (старая проверка `gid in self.group_keys`
+            # намертво игнорировала бы любой присланный позже ре-кей).
+            if not key_data or not key_from or self._group_key_applied.get(gid) == key_data:
                 continue
             spk = self.get_peer_key(key_from)
             if spk:
@@ -799,8 +1244,90 @@ class UserMessenger:
                     # если релей подсунет его под другим gid (см. seal_group_key).
                     self.group_keys[gid] = unseal_group_key(
                         b32decode(key_data), self.identity, spk, gid)
+                    self._group_key_applied[gid] = key_data
                 except Exception:
                     pass
+
+    def list_group_members(self, gid: str) -> list[str]:
+        nonce = gen_nonce()
+        ts = str(int(time.time()))
+        sig = self.identity.sign(gmembers_signing_input(gid, self.username, nonce, ts))
+        res = self._q([CMD_GROUP_MEMBERS, gid, self.username, nonce, ts]
+                      + chunk_string(b32encode(sig), MAX_LABEL_LEN))
+        if not res.startswith('MEMBERS:'):
+            return []
+        return [u for u in res[8:].split(',') if u]
+
+    def leave_group(self, gid: str) -> bool:
+        nonce = gen_nonce()
+        ts = str(int(time.time()))
+        sig = self.identity.sign(gleave_signing_input(gid, self.username, nonce, ts))
+        ok = self._q([CMD_GROUP_LEAVE, gid, self.username, nonce, ts]
+                     + chunk_string(b32encode(sig), MAX_LABEL_LEN)).startswith('OK')
+        if ok:
+            self.group_keys.pop(gid, None)
+            self._group_key_applied.pop(gid, None)
+            self._group_last_members.pop(gid, None)
+        return ok
+
+    def rekey_group(self, gid: str) -> dict:
+        """Новый групповой ключ + рассылка остальным (фаза 4, docs/ratchet-plan.md).
+        Переиспользует invite_to_group/ginvite как канал доставки — 'повторный
+        инвайт' уже состоящему участнику для релея не отличим от обновления
+        его ключа (grp['members'].add — идемпотентно, grp['keys'][user]
+        перезаписывается). Кто ушёл/выкинут, тот НЕ входит в members и
+        рассылку не получает — только это и даёт forward secrecy на leave/kick,
+        а не сама по себе смена ключа."""
+        members = self.list_group_members(gid)
+        if self.username not in members:
+            return {'ok': False, 'error': 'not a member'}
+        new_key = generate_group_key()
+        self.group_keys[gid] = new_key
+        self._group_last_members[gid] = set(members)
+        failed = []
+        for user in members:
+            if user == self.username:
+                continue
+            if not self.invite_to_group(gid, user).get('ok'):
+                failed.append(user)
+        return {'ok': True, 'failed': failed}
+
+    def kick_member(self, gid: str, target: str) -> dict:
+        nonce = gen_nonce()
+        ts = str(int(time.time()))
+        sig = self.identity.sign(gkick_signing_input(gid, self.username, target, nonce, ts))
+        res = self._q([CMD_GROUP_KICK, gid, self.username, target, nonce, ts]
+                      + chunk_string(b32encode(sig), MAX_LABEL_LEN))
+        if not res.startswith('OK'):
+            return {'ok': False, 'error': res}
+        rekey = self.rekey_group(gid)
+        return {'ok': True, 'rekey_failed': rekey.get('failed', [])}
+
+    def check_group_rekey(self):
+        """Децентрализованный ре-кей на добровольный leave (kick уже
+        ре-кеит сам себя синхронно в kick_member — эта проверка нужна ТОЛЬКО
+        для случая, когда участник ушёл сам, и никто не вызвал rekey_group
+        явно). Вызывается из фонового поллинга для каждой известной группы.
+
+        Без единого «админа» ждать, что кто-то один возьмёт на себя ре-кей,
+        не на что — вместо debounce-таймера (как в референсе, см. отчёт по
+        репозиторию друга) детерминированный выбор: ре-кеит только участник с
+        лексикографически наименьшим именем среди ОСТАВШИХСЯ — ровно один
+        кандидат на раунд, гонки между несколькими одновременными ре-кеями
+        не бывает в принципе, а не гасится постфактум таймером."""
+        for gid in list(self.group_keys):
+            try:
+                members = self.list_group_members(gid)
+            except Exception:
+                continue
+            if not members or self.username not in members:
+                continue
+            prev = self._group_last_members.get(gid)
+            self._group_last_members[gid] = set(members)
+            if prev is None:
+                continue     # первое наблюдение — не с чем сравнивать
+            if set(members) < prev and self.username == min(members):
+                self.rekey_group(gid)
 
     def send_file(self, to_user: str, filename: str, data: bytes) -> dict:
         pk = self.get_peer_key(to_user)
@@ -919,10 +1446,61 @@ class UserMessenger:
         """→ (text, auth). auth: verified | forged | unverified | unsigned |
         key_changed | error."""
         try:
-            pk = self.get_peer_key(sender)
-            if not pk:
-                return '[key not found]', 'error'
-            plain = decrypt(b32decode(data_b32), self.identity.derive_shared_key(pk))
+            raw = b32decode(data_b32)
+            if not raw:
+                return '[empty message]', 'error'
+            scheme, body = raw[0], raw[1:]
+
+            if scheme == RATCHET_SCHEME_LEGACY_STATIC:
+                pk = self.get_peer_key(sender)
+                if not pk:
+                    return '[key not found]', 'error'
+                plain = decrypt(body, self.identity.derive_shared_key(pk))
+
+            elif scheme == RATCHET_SCHEME_RATCHET_CONT:
+                # Ratchet-расшифровка сама по себе не требует X25519-ключа
+                # пира (сессия уже несёт всё нужное), но open_signed() ниже
+                # требует его Ed25519 verify-ключ для проверки подписи — а
+                # peer_verify живёт только в памяти этого объекта, не
+                # персистентно. На свежевосстановленном объекте (рестарт) он
+                # пуст, даже если ratchet-сессия сама успешно подхватилась с
+                # диска — без этого вызова подпись молча не проверялась бы
+                # ('unverified' вместо 'verified') на первом же сообщении
+                # после рестарта.
+                self.peer_verify_key(sender)
+                session = self.ratchets.get(sender)
+                if session is None:
+                    # Ratchet-состояние теперь персистентно (docs/ratchet-plan.md
+                    # фаза 2) и подхватывается с диска в __init__, так что сюда
+                    # мы попадаем не из-за обычного рестарта, а если файл
+                    # состояния реально потерян/испорчен, либо пир прислал
+                    # RATCHET_CONT без валидной сессии (протокольная ошибка/
+                    # чужой шум) — расшифровывать нечем в любом случае.
+                    return ('[ratchet session lost — ask them to send a new '
+                            'message to restart the secure session]', 'error')
+                plain = session.decrypt(body)
+                self._persist_ratchet(sender, session)
+
+            elif scheme == RATCHET_SCHEME_RATCHET_INIT:
+                if self.prekeys is None:
+                    return '[no prekeys available to complete the handshake]', 'error'
+                pk = self.get_peer_key(sender)   # тянет и пиннит identity/verify-ключ
+                if not pk:
+                    return '[key not found]', 'error'
+                ephemeral_pub, otpk_pub, ratchet_ct = _unpack_ratchet_init(body)
+                otpk_priv = self.prekeys['one_time'].pop(otpk_pub, None) if otpk_pub else None
+                shared_secret = x3dh_respond(
+                    self.identity, self.prekeys['signed_priv'], otpk_priv,
+                    peer_identity_pub=pk, peer_ephemeral_pub=ephemeral_pub,
+                )
+                session = RatchetSession.init_responder(shared_secret, self.prekeys['signed_priv'])
+                plain = session.decrypt(ratchet_ct)
+                self.ratchets[sender] = session
+                self._persist_ratchet(sender, session)
+
+            else:
+                return '[unknown message scheme]', 'error'
+
             ctx = sender.encode('utf-8') + b'\x00' + self.username.encode('utf-8')
             text, status = open_signed(plain, self.peer_verify.get(sender), ctx)
             if sender in self.key_alerts:
@@ -966,6 +1544,43 @@ def save_profile_photo(username: str, photo: str):
 def update_last_seen(username: str):
     with last_seen_lock:
         last_seen[username] = time.time()
+
+
+# ── Safety number verification state (docs/ratchet-plan.md, фаза 3) ──────
+# Не секрет (это лишь UI-пометка «я сверил число вслух/лично»), поэтому
+# plaintext JSON рядом с профилями/webauthn-креды. Привязана к хешу ИМЕННО
+# ТОГО бандла, что был сверен: если TOFU-пин пира потом сменится (см.
+# _remember_peer/key_alerts), хеш перестанет совпадать и пометка сама
+# перестанет действовать — отдельный код инвалидации не нужен.
+def _verified_peers_file(username: str) -> Path:
+    return Path(f'.messenger_{username}') / 'verified_peers.json'
+
+
+def mark_peer_verified(username: str, peer: str, peer_bundle: bytes):
+    path = _verified_peers_file(username)
+    path.parent.mkdir(exist_ok=True)
+    data = _load_json(path)
+    data[peer] = {
+        'bundle_hash': base64.b64encode(hashlib.sha256(peer_bundle).digest()).decode(),
+        'verified_at': time.time(),
+    }
+    _save_json(path, data)
+
+
+def clear_peer_verified(username: str, peer: str):
+    path = _verified_peers_file(username)
+    data = _load_json(path)
+    if peer in data:
+        del data[peer]
+        _save_json(path, data)
+
+
+def is_peer_verified(username: str, peer: str, peer_bundle: bytes) -> bool:
+    entry = _load_json(_verified_peers_file(username)).get(peer)
+    if not entry:
+        return False
+    expected = base64.b64encode(hashlib.sha256(peer_bundle).digest()).decode()
+    return entry.get('bundle_hash') == expected
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1152,6 +1767,7 @@ def start_poll_loop(m: UserMessenger):
     m.running = True
 
     def loop():
+        cycle = 0
         while m.running:
             got = False
             try:
@@ -1162,6 +1778,14 @@ def start_poll_loop(m: UserMessenger):
                         buffer_or_emit('message', msg, m.username); got = True
                 for finfo in m.poll_files():
                     buffer_or_emit('file', finfo, m.username); got = True
+                cycle += 1
+                if cycle % 4 == 0:
+                    # Реже, чем сообщения — не тайминг-критично: подхватывает
+                    # ключ, разосланный чужим rekey_group (фаза 4,
+                    # docs/ratchet-plan.md), и запускает децентрализованный
+                    # ре-кей при добровольном leave (check_group_rekey).
+                    m.fetch_groups()
+                    m.check_group_rekey()
                 m.poll_errors = 0
                 update_last_seen(m.username)
                 socketio.emit('status', {'connected': True}, room=m.username)
@@ -1490,6 +2114,70 @@ def api_backup_codes_generate():
     return jsonify({'ok': True, 'codes': codes})
 
 
+@app.route('/api/recovery/status')
+def api_recovery_status():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    if not m.persist_identity:
+        return jsonify({'ok': True, 'available': False, 'has_code': False})
+    return jsonify({'ok': True, 'available': True, 'has_code': has_recovery_code(m.username)})
+
+
+@app.route('/api/recovery/generate', methods=['POST'])
+def api_recovery_generate():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'}), 401
+    if not m.persist_identity:
+        # Аноним не персистит identity вообще — восстанавливать нечего.
+        return jsonify({'ok': False, 'error': 'Not available in anonymous mode'}), 400
+    code = generate_recovery_code(m.username, m.identity)
+    return jsonify({'ok': True, 'code': code})
+
+
+@app.route('/api/recovery/reset', methods=['POST'])
+def api_recovery_reset():
+    # Код восстановления — по сути второй пароль (расшифровывает identity),
+    # поэтому лимитируем перебор так же жёстко, как /api/login: и по IP, и
+    # по аккаунту отдельно (ротация IP не должна снимать лимит).
+    if rate_limited(f'recovery:{client_ip()}', max_attempts=10, window_seconds=300.0):
+        return jsonify({'ok': False, 'error': 'Too many attempts. Try again later.'}), 429
+    d = get_json_dict()
+    username = str(d.get('username') or '').strip().lower()
+    code = str(d.get('code') or '')
+    new_password = str(d.get('new_password') or '').strip()
+    if not username or not code:
+        return jsonify({'ok': False, 'error': 'Enter the username and recovery code'})
+    if len(new_password) < 8:
+        return jsonify({'ok': False, 'error': 'Password: minimum 8 characters'})
+    if username in get_blocked():
+        return jsonify({'ok': False, 'error': 'Account is blocked'})
+    # Один и тот же общий ответ на «нет такого юзера» и «код неверный» —
+    # иначе строка ошибки палит существование аккаунта.
+    generic_err = jsonify({'ok': False, 'error': 'Invalid username or recovery code'})
+    if username not in get_accounts():
+        return generic_err
+    if account_throttled(username):
+        return jsonify({'ok': False, 'error': 'Too many attempts. Try again later.'}), 429
+    identity = consume_recovery_code(username, code)
+    if identity is None:
+        note_login_failure(username)
+        return generic_err
+    key_file = Path(f'.messenger_{username}') / 'identity.key'
+    identity.save(str(key_file), new_password)
+    h, s = _hash_password(new_password)
+    save_account(username, h, s)
+    # Код одноразовый: сразу выпускаем новый, старый (уже потраченный) больше
+    # ничего не расшифрует.
+    new_code = generate_recovery_code(username, identity)
+    # Пароль сменился «в обход» обычного логина — на всякий случай гасим
+    # любые уже выданные куки этого аккаунта, как при обычном логауте.
+    bump_user_sv(username)
+    print(f'[+] Account recovered via recovery code: {username}')
+    return jsonify({'ok': True, 'code': new_code})
+
+
 @app.route('/api/webauthn/login/backup', methods=['POST'])
 def api_webauthn_login_backup():
     if rate_limited(f'webauthn:{client_ip()}', max_attempts=15, window_seconds=60.0):
@@ -1621,6 +2309,55 @@ def api_resolve():
     return jsonify({'found': False, 'error': f'"{user}" not found. Must sign in first.'})
 
 
+def _safety_number_peer_bundle(m: 'UserMessenger', peer: str) -> bytes | None:
+    """Пин пира (X25519+Ed25519) как единый бандл, или None — либо пир не
+    найден, либо у него нет Ed25519 (легаси-бандл без подписи, до фазы 1)."""
+    pk = m.get_peer_key(peer)     # тянет/подтверждает TOFU-пин
+    if not pk:
+        return None
+    ed = m.peer_verify.get(peer)
+    if not ed:
+        return None
+    return pk + ed
+
+
+@app.route('/api/safety-number/<peer>')
+def api_safety_number(peer):
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'})
+    peer = str(peer).strip().lower()
+    if peer == m.username:
+        return jsonify({'ok': False, 'error': 'Cannot compare with yourself'})
+    peer_bundle = _safety_number_peer_bundle(m, peer)
+    if not peer_bundle:
+        return jsonify({'ok': False, 'error': f'"{peer}" not found or has no signing key'})
+    digits = safety_number(m.username, m.identity.public_bundle(), peer, peer_bundle)
+    return jsonify({
+        'ok': True,
+        'peer': peer,
+        'number': format_safety_number(digits),
+        'verified': is_peer_verified(m.username, peer, peer_bundle),
+    })
+
+
+@app.route('/api/safety-number/<peer>/verify', methods=['POST'])
+def api_safety_number_verify(peer):
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'error': 'Not authorized'})
+    peer = str(peer).strip().lower()
+    peer_bundle = _safety_number_peer_bundle(m, peer)
+    if not peer_bundle:
+        return jsonify({'ok': False, 'error': f'"{peer}" not found or has no signing key'})
+    verified = bool(get_json_dict().get('verified'))
+    if verified:
+        mark_peer_verified(m.username, peer, peer_bundle)
+    else:
+        clear_peer_verified(m.username, peer)
+    return jsonify({'ok': True, 'verified': verified})
+
+
 # ── Группы ───────────────────────────────────────────────────────────
 
 @app.route('/api/groups')
@@ -1676,6 +2413,44 @@ def api_group_send():
     if not group or not text:
         return jsonify({'ok': False, 'error': 'Missing "group" or "text"'}), 400
     return jsonify({'ok': m.send_group(group, text)})
+
+
+@app.route('/api/groups/members')
+def api_group_members():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False, 'members': []})
+    group = str(request.args.get('group') or '').strip().lower()
+    if not group:
+        return jsonify({'ok': False, 'error': 'Missing "group"', 'members': []}), 400
+    return jsonify({'ok': True, 'members': m.list_group_members(group)})
+
+
+@app.route('/api/groups/leave', methods=['POST'])
+def api_group_leave():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False})
+    group = str(get_json_dict().get('group') or '').strip().lower()
+    if not group:
+        return jsonify({'ok': False, 'error': 'Missing "group"'}), 400
+    ok = m.leave_group(group)
+    return jsonify({'ok': ok, 'error': '' if ok else 'Error'})
+
+
+@app.route('/api/groups/kick', methods=['POST'])
+def api_group_kick():
+    m = get_messenger()
+    if not m:
+        return jsonify({'ok': False})
+    d = get_json_dict()
+    group = str(d.get('group') or '').strip().lower()
+    target = str(d.get('user') or '').strip().lower()
+    if not group or not target:
+        return jsonify({'ok': False, 'error': 'Missing "group" or "user"'}), 400
+    if target == m.username:
+        return jsonify({'ok': False, 'error': 'Use leave, not kick, to remove yourself'})
+    return jsonify(m.kick_member(group, target))
 
 
 # ── Пользователи ────────────────────────────────────────────────
@@ -2053,6 +2828,11 @@ def admin_delete():
         m = users.pop(username, None)
         if m:
             m.running = False
+    # identity.key/recovery/passkeys/backup-коды/фото — иначе ник, отданный
+    # заново другому человеку, либо унаследует чужие данные, либо (при
+    # зашифрованном identity под чужим паролем) вообще не сможет
+    # зарегистрироваться — см. purge_username_data().
+    purge_username_data(username)
     print(f'[ADMIN] Deleted: {username}')
     return jsonify({'ok': True})
 

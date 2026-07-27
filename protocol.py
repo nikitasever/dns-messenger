@@ -60,6 +60,9 @@ CMD_GROUP_INVITE  = 'i'
 CMD_GROUP_SEND    = 'g'
 CMD_GROUP_POLL    = 'q'
 CMD_GROUP_LIST    = 'l'
+CMD_GROUP_LEAVE   = 'e'
+CMD_GROUP_KICK    = 'm'
+CMD_GROUP_MEMBERS = 'b'
 
 # Файлы
 CMD_FILE_HEADER   = 'h'

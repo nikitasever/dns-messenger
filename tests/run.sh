@@ -25,12 +25,40 @@ echo "== Python group impersonation integration test =="
 python tests/test_group_auth.py
 
 echo
+echo "== Python group leave/kick + re-key integration test =="
+python tests/test_group_rekey.py
+
+echo
+echo "== Python X3DH + Double Ratchet primitives test =="
+python tests/test_ratchet.py
+
+echo
+echo "== Python DM Double Ratchet integration test =="
+python tests/test_dm_ratchet.py
+
+echo
+echo "== Python ratchet-state persistence test =="
+python tests/test_ratchet_persistence.py
+
+echo
+echo "== Python prekey bootstrap/replenish/rotation test =="
+python tests/test_prekey_rotation.py
+
+echo
+echo "== Python safety number test =="
+python tests/test_safety_number.py
+
+echo
 echo "== Python relay auth (pinning + signed poll) test =="
 python tests/test_relay_auth.py
 
 echo
 echo "== Python identity at-rest encryption test =="
 python tests/test_identity_enc.py
+
+echo
+echo "== Python account recovery-code test =="
+python tests/test_recovery.py
 
 echo
 echo "== Python relay memory-bounds (DoS) test =="

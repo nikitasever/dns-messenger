@@ -725,10 +725,14 @@ function renderHeader() {
         <div class="header-actions">
             <button onclick="openChatSearch()" title="Поиск по чату">&#x1F50D;</button>
             ${!isGroup ? `
+                <button onclick="showSafetyNumber('${esc(chat.name)}')" title="Число безопасности">&#x1F512;</button>
                 <button onclick="startCall(false)" title="Голосовой вызов">&#x1F4DE;</button>
                 <button onclick="startCall(true)" title="Видеозвонок">&#x1F4F9;</button>
             ` : ''}
-            ${isGroup ? `<button class="invite-btn" onclick="showInviteModal()">+ Участник</button>` : ''}
+            ${isGroup ? `
+                <button onclick="showGroupMembers()" title="Участники">&#x1F465;</button>
+                <button class="invite-btn" onclick="showInviteModal()">+ Участник</button>
+            ` : ''}
         </div>
     `;
 
@@ -1843,6 +1847,107 @@ function showBackupCodesModal(codes) {
     });
 }
 
+// Код восстановления пароля отдаётся в открытом виде РОВНО ОДИН РАЗ (как и
+// backup-коды выше) — на диске лежит только шифротекст ключей под ним,
+// повторно код с сервера получить нельзя, только перегенерировать (и тогда
+// старый безвозвратно перестаёт работать).
+function showRecoveryCodeModal(code) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+        <div class="modal">
+            <h3>Код восстановления пароля</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">
+                Единственный способ задать новый пароль, если забудете текущий —
+                без него забытый пароль не восстановить никак. Сохраните код
+                сейчас в надёжном месте, отдельно от этого устройства: повторно
+                показать его будет нельзя, только сгенерировать новый (старый
+                тогда перестанет работать).
+            </p>
+            <pre style="background:var(--bg-input);padding:12px;border-radius:8px;
+                        font-size:16px;letter-spacing:1px;text-align:center;user-select:all">${esc(code)}</pre>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="copy-recovery-code">Скопировать</button>
+                <button class="btn" onclick="this.closest('.modal-overlay').remove()">Готово</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#copy-recovery-code')?.addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(code);
+            toast('Скопировано', 'success');
+        } catch (e) {
+            toast('Не удалось скопировать', 'error');
+        }
+    });
+}
+
+// Число безопасности (фаза 3, docs/ratchet-plan.md) — опциональная ручная
+// сверка identity-ключей вне канала (лично/голосом), не блокирует отправку.
+// TOFU-пиннинг уже ловит подмену ключа на лету — это дополнительная сверка
+// именно для первого контакта, до того как есть с чем сравнивать пин.
+async function showSafetyNumber(peer) {
+    let data;
+    try {
+        data = await fetch(`/api/safety-number/${encodeURIComponent(peer)}`).then(r => r.json());
+    } catch (e) {
+        toast('Не удалось получить число безопасности', 'error');
+        return;
+    }
+    if (!data.ok) {
+        toast(data.error || 'Число безопасности недоступно', 'error');
+        return;
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+        <div class="modal">
+            <h3>Число безопасности с ${esc(peer)}</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">
+                Сверьте это число с собеседником по другому каналу (лично, голосом) —
+                если оно совпадает посимвольно с обеих сторон, ключи шифрования
+                подлинные и никто не подменил их посередине. Необязательный шаг:
+                переписка и так защищена сквозным шифрованием без этой сверки.
+            </p>
+            <pre style="background:var(--bg-input);padding:12px;border-radius:8px;
+                        font-size:15px;letter-spacing:1px;text-align:center;
+                        user-select:all;line-height:1.6">${esc(data.number)}</pre>
+            <label style="display:flex;align-items:center;gap:8px;margin:12px 0;cursor:pointer">
+                <input type="checkbox" id="safety-verified-check" ${data.verified ? 'checked' : ''}>
+                <span>Число сверено, ключи подтверждены</span>
+            </label>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" id="copy-safety-number">Скопировать</button>
+                <button class="btn" onclick="this.closest('.modal-overlay').remove()">Готово</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#copy-safety-number')?.addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(data.number);
+            toast('Скопировано', 'success');
+        } catch (e) {
+            toast('Не удалось скопировать', 'error');
+        }
+    });
+    overlay.querySelector('#safety-verified-check')?.addEventListener('change', async (e) => {
+        try {
+            const res = await fetch(`/api/safety-number/${encodeURIComponent(peer)}/verify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ verified: e.target.checked }),
+            }).then(r => r.json());
+            if (!res.ok) throw new Error(res.error || 'failed');
+            toast(e.target.checked ? 'Отмечено как сверено' : 'Отметка снята', 'success');
+        } catch (err) {
+            e.target.checked = !e.target.checked;
+            toast('Не удалось сохранить отметку', 'error');
+        }
+    });
+}
+
 function buildSettingsSection(id) {
     const toggleRow = (label, key, def, hint) => {
         const on = getSetting(key, def);
@@ -1957,6 +2062,22 @@ function buildSettingsSection(id) {
                 </div>
                 <button class="btn btn-secondary" id="regen-backup-codes">Создать новые</button>
             </div>
+            <h4 class="set-section-title" style="margin-top:22px">Восстановление аккаунта</h4>
+            <div class="set-hint" style="margin-bottom:14px">
+                Пароль не хранится на сервере в открытом виде — он же шифрует ваши
+                ключи переписки, поэтому забытый пароль восстановить нельзя. Код
+                восстановления — единственный запасной путь: сохраните его в
+                надёжном месте (менеджер паролей, сейф) отдельно от устройства.
+            </div>
+            <div class="set-row">
+                <div>
+                    <div class="set-label">Код восстановления пароля</div>
+                    <div class="set-hint">Позволяет задать новый пароль, если забыли текущий.
+                        <span id="recovery-code-status"></span>
+                    </div>
+                </div>
+                <button class="btn btn-secondary" id="regen-recovery-code">Создать код</button>
+            </div>
         `;
     }
     if (id === 'appear') {
@@ -1985,6 +2106,7 @@ function buildSettingsSection(id) {
                 { val: 'candy',   label: '🍬 Карамель' },
                 { val: 'nebula',  label: '🌌 Туманность' },
                 { val: 'emerald', label: '💚 Изумруд' },
+                { val: 'snow',    label: '❄️ Снег' },
                 { val: 'solid',   label: 'Цвет' },
                 { val: 'custom',  label: 'Изображение' },
             ])}
@@ -2014,6 +2136,7 @@ function buildSettingsSection(id) {
                 { val: 'candy',   label: '🍬 Карамель' },
                 { val: 'nebula',  label: '🌌 Туманность' },
                 { val: 'emerald', label: '💚 Изумруд' },
+                { val: 'snow',    label: '❄️ Снег' },
                 { val: 'solid',   label: 'Цвет' },
                 { val: 'custom',  label: 'Изображение' },
             ])}
@@ -2315,6 +2438,34 @@ function wireSettingsSection(id, root, overlay) {
                 renderBackupStatus();
             } catch (e) {
                 toast('Не удалось создать коды', 'error');
+            }
+        });
+
+        const recoveryEl = byId('recovery-code-status');
+        const renderRecoveryStatus = async () => {
+            if (!recoveryEl) return;
+            try {
+                const res = await fetch('/api/recovery/status').then(r => r.json());
+                if (!res.ok) { recoveryEl.textContent = ''; return; }
+                recoveryEl.textContent = res.has_code ? 'Код создан' : 'Ещё не создан';
+            } catch (e) {
+                recoveryEl.textContent = '';
+            }
+        };
+        renderRecoveryStatus();
+        byId('regen-recovery-code')?.addEventListener('click', async () => {
+            const already = byId('recovery-code-status')?.textContent === 'Код создан';
+            const warn = already
+                ? 'Создать новый код восстановления? Старый (даже неиспользованный) перестанет работать.'
+                : 'Создать код восстановления? Он единственный способ вернуть доступ, если вы забудете пароль — сохраните его в надёжном месте, отдельно от этого устройства.';
+            if (!confirm(warn)) return;
+            try {
+                const res = await fetch('/api/recovery/generate', { method: 'POST' }).then(r => r.json());
+                if (!res.ok) { toast(res.error || 'Не удалось создать код', 'error'); return; }
+                showRecoveryCodeModal(res.code);
+                renderRecoveryStatus();
+            } catch (e) {
+                toast('Не удалось создать код', 'error');
             }
         });
     }
@@ -3748,6 +3899,90 @@ function showInviteModal() {
     });
 }
 
+// Кик/leave (фаза 4, docs/ratchet-plan.md) — любой участник может выкинуть
+// любого другого (та же ungated-модель доверия, что у инвайта); при выходе
+// или киках группа сама себя ре-кеит на сервере/у клиентов, здесь только UI.
+async function showGroupMembers() {
+    if (!state.currentChat || state.currentChat.type !== 'group') return;
+    const gid = state.currentChat.id;
+    let data;
+    try {
+        data = await fetch(`/api/groups/members?group=${encodeURIComponent(gid)}`).then(r => r.json());
+    } catch (e) {
+        toast('Не удалось получить список участников', 'error');
+        return;
+    }
+    if (!data.ok) {
+        toast(data.error || 'Не удалось получить список участников', 'error');
+        return;
+    }
+    const members = data.members || [];
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+        <div class="modal">
+            <h3>Участники группы</h3>
+            <div class="member-list" style="text-align:left;margin:12px 0;max-height:300px;overflow-y:auto">
+                ${members.map(u => `
+                    <div class="member-row" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
+                        <span>${esc(u)}${u === state.username ? ' (вы)' : ''}</span>
+                        ${u !== state.username ? `<button class="btn btn-secondary" data-kick="${esc(u)}" style="padding:4px 10px;font-size:12px">Исключить</button>` : ''}
+                    </div>
+                `).join('')}
+            </div>
+            <div class="modal-actions" style="flex-direction:column;gap:8px">
+                <button class="btn btn-secondary" id="leave-group-btn">Покинуть группу</button>
+                <button class="btn" onclick="this.closest('.modal-overlay').remove()">Закрыть</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll('[data-kick]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const target = btn.dataset.kick;
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/groups/kick', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ group: gid, user: target }),
+                }).then(r => r.json());
+                if (res.ok) {
+                    toast(`${target} исключён(а)`, 'success');
+                    btn.closest('.member-row').remove();
+                } else {
+                    toast(res.error || 'Не удалось исключить', 'error');
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                toast('Не удалось исключить', 'error');
+                btn.disabled = false;
+            }
+        });
+    });
+    overlay.querySelector('#leave-group-btn')?.addEventListener('click', async () => {
+        if (!confirm('Покинуть эту группу?')) return;
+        try {
+            const res = await fetch('/api/groups/leave', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ group: gid }),
+            }).then(r => r.json());
+            if (res.ok) {
+                overlay.remove();
+                delete state.chats[gid];
+                saveState();
+                goBack();
+                toast('Вы покинули группу', 'success');
+            } else {
+                toast(res.error || 'Не удалось покинуть группу', 'error');
+            }
+        } catch (e) {
+            toast('Не удалось покинуть группу', 'error');
+        }
+    });
+}
+
 // ── Socket.IO events ────────────────────────────────────────────────
 socket.on('message', (msg) => {
     let chatId, chatType, chatName;
@@ -4129,6 +4364,12 @@ function showProfilePhotoUpload() {
                 if (res.ok) {
                     profilePhotos[state.username] = resized;
                     renderChatList();
+                    // Меняем фото прямо из открытого drawer — сам он
+                    // перерисовывается только в openDrawer(), а drawer в этот
+                    // момент уже открыт и повторно не откроется, так что без
+                    // явного обновления аватарка тут молча оставалась старой.
+                    const $da = $('#drawer-avatar');
+                    if ($da) $da.innerHTML = `<img src="${esc(resized)}" class="avatar-img" alt="">`;
                     toast(t('photo_updated'), 'success');
                 } else {
                     toast(res.error || t('send_error'), 'error');

@@ -21,7 +21,8 @@ DOWNLOAD_PIECE = 1400
 from protocol import (
     CMD_REGISTER, CMD_GETKEY, CMD_SEND, CMD_POLL,
     CMD_GROUP_CREATE, CMD_GROUP_INVITE, CMD_GROUP_SEND,
-    CMD_GROUP_POLL, CMD_GROUP_LIST,
+    CMD_GROUP_POLL, CMD_GROUP_LIST, CMD_GROUP_LEAVE, CMD_GROUP_KICK,
+    CMD_GROUP_MEMBERS,
     CMD_FILE_HEADER, CMD_FILE_CHUNK, CMD_FILE_POLL, CMD_FILE_DOWNLOAD,
     CMD_LIST_USERS,
     b32encode, b32decode,
@@ -30,6 +31,7 @@ from crypto_utils import (
     split_bundle, verify_sig,
     poll_signing_input, fpoll_signing_input, glist_signing_input,
     reg_signing_input, gpoll_signing_input, ginvite_signing_input,
+    gleave_signing_input, gkick_signing_input, gmembers_signing_input,
 )
 
 # Бандл (X25519||Ed25519) и Ed25519-подпись — оба ровно 64 байта, значит их
@@ -436,6 +438,83 @@ class RelayServer:
             return 'EMPTY'
         return 'GROUPS:' + '|'.join(result)
 
+    def _h_gleave(self, L: list[str]) -> str:
+        # e.<group>.<user>.<nonce>.<ts>.<sig_b32…> — та же модель доверия,
+        # что у gpoll/glist через _authorize_poll: ЗАКРЕПЛЁННОЕ имя обязано
+        # подписать (gleave_signing_input) с nonce+ts (защита от повтора),
+        # незакреплённое (легаси/анонимное) проходит без проверки — оно и
+        # так не даёт никаких identity-гарантий нигде в системе, ужесточать
+        # именно тут не имеет смысла.
+        if len(L) < 2:
+            return 'ERR:bad_gleave'
+        gid, user = L[0], L[1]
+        with self.lock:
+            entry = self.users.get(user)
+        err = self._authorize_poll(
+            user, entry, L[1:], lambda u, n, ts: gleave_signing_input(gid, u, n, ts), f'gleave:{gid}')
+        if err:
+            return err
+        with self.lock:
+            grp = self.groups.get(gid)
+            if not grp:
+                return 'ERR:no_group'
+            if user not in grp['members']:
+                return 'ERR:not_member'
+            grp['members'].discard(user)
+            grp['keys'].pop(user, None)
+        print(f'[G-] {user} left {gid}')
+        return 'OK:left'
+
+    def _h_gkick(self, L: list[str]) -> str:
+        # m.<group>.<kicker>.<target>.<nonce>.<ts>.<sig_b32…>
+        if len(L) < 3:
+            return 'ERR:bad_gkick'
+        gid, kicker, target = L[0], L[1], L[2]
+        with self.lock:
+            entry = self.users.get(kicker)
+        err = self._authorize_poll(
+            kicker, entry, L[2:],
+            lambda u, n, ts: gkick_signing_input(gid, u, target, n, ts), f'gkick:{gid}')
+        if err:
+            return err
+        with self.lock:
+            grp = self.groups.get(gid)
+            if not grp:
+                return 'ERR:no_group'
+            if kicker not in grp['members']:
+                return 'ERR:not_member'
+            if target == kicker:
+                return 'ERR:use_leave'
+            if target not in grp['members']:
+                return 'ERR:target_not_member'
+            grp['members'].discard(target)
+            grp['keys'].pop(target, None)
+        print(f'[G-] {kicker} kicked {target} from {gid}')
+        return 'OK:kicked'
+
+    def _h_gmembers(self, L: list[str]) -> str:
+        # b.<group>.<user>.<nonce>.<ts>.<sig_b32…> — членство не публично,
+        # отдаём только проверенному действующему участнику (нужен клиенту,
+        # чтобы разослать свежий групповой ключ остальным после kick/leave —
+        # см. web_client.rekey_group).
+        if len(L) < 2:
+            return 'ERR:bad_gmembers'
+        gid, user = L[0], L[1]
+        with self.lock:
+            entry = self.users.get(user)
+        err = self._authorize_poll(
+            user, entry, L[1:], lambda u, n, ts: gmembers_signing_input(gid, u, n, ts), f'gmembers:{gid}')
+        if err:
+            return err
+        with self.lock:
+            grp = self.groups.get(gid)
+            if not grp:
+                return 'ERR:no_group'
+            if user not in grp['members']:
+                return 'ERR:not_member'
+            members = sorted(grp['members'])
+        return 'MEMBERS:' + ','.join(members)
+
     # ═══════════════════════════════════════════════════════════════════
     # Файлы
     # ═══════════════════════════════════════════════════════════════════
@@ -702,6 +781,9 @@ class RelayServer:
         CMD_GROUP_SEND:    '_h_gsend',
         CMD_GROUP_POLL:    '_h_gpoll',
         CMD_GROUP_LIST:    '_h_glist',
+        CMD_GROUP_LEAVE:   '_h_gleave',
+        CMD_GROUP_KICK:    '_h_gkick',
+        CMD_GROUP_MEMBERS: '_h_gmembers',
         CMD_FILE_HEADER:   '_h_fheader',
         CMD_FILE_CHUNK:    '_h_fchunk',
         CMD_FILE_POLL:     '_h_fpoll',

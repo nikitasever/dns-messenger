@@ -164,6 +164,48 @@ def verify_sig(verify_pub: bytes, data: bytes, sig: bytes) -> bool:
         return False
 
 
+# ── Safety number (фаза 3, docs/ratchet-plan.md) ──────────────────────────
+# Signal-style: по 30 байт итерированного самохеша на каждого собеседника
+# (дороже подобрать бандл с заданным отпечатком, чем одиночным хешем),
+# сведённые к 5-значным группам, отсортированные по имени пользователя так,
+# чтобы оба собеседника получили ОДНУ И ТУ ЖЕ строку независимо от того, кто
+# 'self', а кто 'peer'. Это не альтернатива TOFU-пиннингу (тот уже есть и
+# ловит подмену бандла на лету) — это ручная сверка при первом контакте, до
+# того как есть с чем сравнивать пин.
+import hashlib as _hashlib
+
+SAFETY_NUMBER_ROUNDS = 5200
+
+
+def identity_fingerprint(username: str, bundle: bytes,
+                          rounds: int = SAFETY_NUMBER_ROUNDS) -> bytes:
+    data = _hashlib.sha512(username.encode('utf-8') + bundle).digest()
+    for _ in range(rounds):
+        data = _hashlib.sha512(data + bundle).digest()
+    return data[:30]
+
+
+def _fingerprint_digits(fp: bytes) -> str:
+    """30 байт → 30 десятичных цифр, по 5 байт на 5-значную группу."""
+    groups = []
+    for i in range(0, 30, 5):
+        n = int.from_bytes(fp[i:i + 5], 'big') % 100000
+        groups.append(f'{n:05d}')
+    return ''.join(groups)
+
+
+def safety_number(user_a: str, bundle_a: bytes, user_b: str, bundle_b: bytes) -> str:
+    """60-значный комбинированный отпечаток пары. Симметричен: порядок
+    аргументов a/b не влияет на результат (сортировка по имени пользователя)."""
+    pair = sorted([(user_a, bundle_a), (user_b, bundle_b)], key=lambda p: p[0])
+    return ''.join(_fingerprint_digits(identity_fingerprint(u, b)) for u, b in pair)
+
+
+def format_safety_number(digits: str) -> str:
+    """60 цифр → 12 групп по 5, разделённых пробелом — как отображает Signal."""
+    return ' '.join(digits[i:i + 5] for i in range(0, len(digits), 5))
+
+
 # ── Аутентификация запросов к релею (регистрация / poll) ─────────────
 # Релей — stateless DNS, «кто спрашивает» из транспорта не узнать. Клиент
 # подписывает запрос своим Ed25519-ключом, релей проверяет против verify-ключа
@@ -234,6 +276,42 @@ def ginvite_signing_input(gid: str, inviter: str, invited: str) -> bytes:
         inviter.encode('utf-8') + b'|' + invited.encode('utf-8')
 
 
+GLEAVE_SIG_CONTEXT = b'dnsmsg-gleave-v1'
+GKICK_SIG_CONTEXT = b'dnsmsg-gkick-v1'
+
+
+def gleave_signing_input(gid: str, user: str, nonce: str, ts: str) -> bytes:
+    """Подпись самостоятельного выхода из группы: без неё релей принял бы
+    заявленный уход ЛЮБОГО имени — посторонний мог бы выкинуть чужого
+    участника из группы, просто заявив 'я — он, я ухожу'. nonce+ts (как в
+    gpoll/glist, не как в ginvite — здесь нет вложенного ключа, бюджет
+    DNS-имени не поджимает) закрывают повтор: без них перехваченный уход
+    можно было бы переиграть и после того, как участника пригласили обратно."""
+    return GLEAVE_SIG_CONTEXT + b'|' + gid.encode('utf-8') + b'|' + \
+        user.encode('utf-8') + b'|' + nonce.encode('ascii') + b'|' + ts.encode('ascii')
+
+
+def gkick_signing_input(gid: str, kicker: str, target: str, nonce: str, ts: str) -> bytes:
+    """Подпись исключения участника: тот же риск, что у gleave, только
+    заявленный актёр — 'kicker', а не сама жертва. Умышленно не ограничено
+    создателем группы — тот же ungated-модель доверия, что уже у ginvite
+    (любой участник может пригласить, значит любой может и исключить)."""
+    return GKICK_SIG_CONTEXT + b'|' + gid.encode('utf-8') + b'|' + \
+        kicker.encode('utf-8') + b'|' + target.encode('utf-8') + b'|' + \
+        nonce.encode('ascii') + b'|' + ts.encode('ascii')
+
+
+GMEMBERS_SIG_CONTEXT = b'dnsmsg-gmembers-v1'
+
+
+def gmembers_signing_input(gid: str, user: str, nonce: str, ts: str) -> bytes:
+    """Подпись запроса списка участников группы: список — не публичная
+    информация (кто состоит в чате), выдаётся только реально проверенному
+    члену группы, не любому заявившему себя им."""
+    return GMEMBERS_SIG_CONTEXT + b'|' + gid.encode('utf-8') + b'|' + \
+        user.encode('utf-8') + b'|' + nonce.encode('ascii') + b'|' + ts.encode('ascii')
+
+
 # ── Подписанная нагрузка ─────────────────────────────────────────────
 # Внутри шифротекста лежит: VERSION(1) || Ed25519-подпись(64) || plaintext.
 # Подпись покрывает context || plaintext, где context привязывает сообщение к
@@ -262,15 +340,20 @@ def open_signed(blob: bytes, verify_pub: bytes | None, context: bytes) -> tuple[
 
 # ── Симметричное шифрование ──────────────────────────────────────────
 
-def encrypt(plaintext: bytes, key: bytes) -> bytes:
-    """ChaCha20-Poly1305: → nonce(12) || ciphertext || tag(16)."""
+def encrypt(plaintext: bytes, key: bytes, aad: bytes | None = None) -> bytes:
+    """ChaCha20-Poly1305: → nonce(12) || ciphertext || tag(16).
+
+    aad (authenticated but not encrypted) is None by default — every existing
+    caller keeps behaving exactly as before. The ratchet module passes the
+    message header here so a tampered header fails the AEAD tag instead of
+    silently steering decryption toward the wrong derived key."""
     nonce = os.urandom(12)
-    return nonce + ChaCha20Poly1305(key).encrypt(nonce, plaintext, None)
+    return nonce + ChaCha20Poly1305(key).encrypt(nonce, plaintext, aad)
 
 
-def decrypt(data: bytes, key: bytes) -> bytes:
+def decrypt(data: bytes, key: bytes, aad: bytes | None = None) -> bytes:
     """ChaCha20-Poly1305: nonce(12) || ciphertext || tag(16) → plaintext."""
-    return ChaCha20Poly1305(key).decrypt(data[:12], data[12:], None)
+    return ChaCha20Poly1305(key).decrypt(data[:12], data[12:], aad)
 
 
 # ── Групповые ключи ─────────────────────────────────────────────────
