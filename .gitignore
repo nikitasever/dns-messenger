@@ -19,3 +19,7 @@ __pycache__/
 .claude/
 .vscode/
 .messenger_sv.json
+
+# Secrets
+yandex_token.txt
+.yandex_token
