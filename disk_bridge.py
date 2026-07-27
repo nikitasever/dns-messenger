@@ -12,18 +12,17 @@ loopback UDP — точно так же, как это делает обычны
 UDPTransport, только источник запроса — файл на Диске, а не сеть.
 
 Реестр клиентов (кто на какой публичный ключ своей папки на Диске пишет
-запросы) сейчас читается из простого JSON-файла — задача автоматической
-регистрации через сам протокол (см. план) вынесена за рамки прототипа.
+запросы) мост тянет у самого relay через CMD_DISK_LIST ('z') — клиент
+регистрирует свой public_key заранее, пока обычный транспорт ещё работает
+(UserMessenger.register_disk_pubkey, "на чёрный день"), relay хранит его в
+памяти вместе с остальным состоянием пользователя.
 
-Запуск:  python disk_bridge.py --relay-host 127.0.0.1 --relay-port 15353 \
-             --clients disk_bridge_clients.json
+Запуск:  python disk_bridge.py --domain msg.example.com \
+             --relay-host 127.0.0.1 --relay-port 15353
 (укажи --relay-port тот же, что RELAY_PORT в systemd-юните relay-процесса —
 мост должен слать на порт УЖЕ ЗАПУЩЕННОГО relay, не поднимать новый).
 Требует переменную окружения YANDEX_DISK_TOKEN — OAuth-токен папки приложения
 моста (именно моста, не клиентов).
-
-Формат disk_bridge_clients.json:
-  {"alice": {"public_key": "<public_key папки Алисы>"}, ...}
 """
 
 import argparse
@@ -35,8 +34,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from dnslib import DNSRecord, QTYPE
+
+from protocol import CMD_DISK_LIST, b32decode
+from transport import _build_query
+
 API = 'https://cloud-api.yandex.net/v1/disk'
 POLL_INTERVAL = 3.0
+REGISTRY_REFRESH_INTERVAL = 30.0
 
 
 def _req(method, url, headers=None, data=None):
@@ -114,12 +119,44 @@ def forward_to_relay(relay_addr, pkt: bytes) -> bytes | None:
         sock.close()
 
 
+def fetch_registry(domain, relay_addr) -> dict:
+    """Тянет {username: disk_public_key} у самого relay через CMD_DISK_LIST —
+    та же пересылка по loopback UDP, что и для клиентских запросов, просто
+    сам мост выступает отправителем."""
+    pkt = _build_query([CMD_DISK_LIST], domain)
+    raw = forward_to_relay(relay_addr, pkt)
+    if raw is None:
+        return {}
+    try:
+        resp = DNSRecord.parse(raw)
+        txt = ''
+        for rr in resp.rr:
+            if rr.rtype == QTYPE.TXT:
+                txt = b''.join(rr.rdata.data).decode('utf-8', errors='replace')
+                break
+    except Exception:
+        return {}
+    if not txt.startswith('OK:'):
+        return {}
+    out = {}
+    for entry in txt[len('OK:'):].split(','):
+        if ':' not in entry:
+            continue
+        user, pk_b32 = entry.split(':', 1)
+        try:
+            out[user] = b32decode(pk_b32).decode('utf-8')
+        except Exception:
+            continue
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description='Yandex.Disk cover-channel bridge')
+    ap.add_argument('--domain', required=True,
+                     help='тот же domain, с которым запущен сам relay')
     ap.add_argument('--relay-host', default='127.0.0.1')
     ap.add_argument('--relay-port', type=int, required=True,
                      help='порт УЖЕ ЗАПУЩЕННОГО relay-процесса (RELAY_PORT из systemd-юнита)')
-    ap.add_argument('--clients', default='disk_bridge_clients.json')
     args = ap.parse_args()
     relay_addr = (args.relay_host, args.relay_port)
 
@@ -132,18 +169,21 @@ def main():
     print(f'[*] forwarding to relay at {relay_addr}', flush=True)
 
     seen_per_client: dict[str, set] = {}
+    clients: dict[str, str] = {}
+    last_registry_fetch = 0.0
 
     while True:
-        try:
-            with open(args.clients, encoding='utf-8') as f:
-                clients = json.load(f)
-        except FileNotFoundError:
-            clients = {}
+        now = time.time()
+        if now - last_registry_fetch > REGISTRY_REFRESH_INTERVAL:
+            fresh = fetch_registry(args.domain, relay_addr)
+            if fresh:
+                new = set(fresh) - set(clients)
+                if new:
+                    print(f'[*] registry: {len(new)} new client(s): {sorted(new)}', flush=True)
+                clients = fresh
+            last_registry_fetch = now
 
-        for username, info in clients.items():
-            cpk = info.get('public_key')
-            if not cpk:
-                continue
+        for username, cpk in clients.items():
             seen = seen_per_client.setdefault(username, set())
             for name in list_client_queries(cpk, seen):
                 seen.add(name)

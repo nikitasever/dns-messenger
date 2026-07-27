@@ -29,6 +29,10 @@ echo "== Python group leave/kick + re-key integration test =="
 python tests/test_group_rekey.py
 
 echo
+echo "== Python disk-channel pubkey registration test =="
+python tests/test_disk_register.py
+
+echo
 echo "== Python X3DH + Double Ratchet primitives test =="
 python tests/test_ratchet.py
 

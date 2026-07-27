@@ -312,6 +312,22 @@ def gmembers_signing_input(gid: str, user: str, nonce: str, ts: str) -> bytes:
         user.encode('utf-8') + b'|' + nonce.encode('ascii') + b'|' + ts.encode('ascii')
 
 
+DISK_REG_SIG_CONTEXT = b'dnsmsg-diskreg-v1'
+
+
+def disk_register_signing_input(user: str, pubkey: str, nonce: str, ts: str) -> bytes:
+    """Подпись регистрации public_key covert-канала через Яндекс.Диск
+    (docs/traffic-analysis-plan.md, фаза C). Подписывается хэш pubkey, а не
+    сам pubkey целиком — иначе пришлось бы решать проблему переменной длины
+    в подписываемых байтах так же аккуратно, как и в DNS-лейблах, а так
+    подпись фиксированного размера и привязана к точному значению: подменить
+    зарегистрированный public_key, переиграв старую валидную подпись с
+    другим содержимым, не получится."""
+    h = _hashlib.sha256(pubkey.encode('utf-8')).hexdigest()
+    return DISK_REG_SIG_CONTEXT + b'|' + user.encode('utf-8') + b'|' + \
+        h.encode('ascii') + b'|' + nonce.encode('ascii') + b'|' + ts.encode('ascii')
+
+
 # ── Подписанная нагрузка ─────────────────────────────────────────────
 # Внутри шифротекста лежит: VERSION(1) || Ed25519-подпись(64) || plaintext.
 # Подпись покрывает context || plaintext, где context привязывает сообщение к

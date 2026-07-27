@@ -5,6 +5,7 @@ DNS Relay Server — ретранслятор с поддержкой групп
     python server.py --domain msg.tunnel.local --port 5353
 """
 
+import base64
 import socket
 import threading
 import time
@@ -24,7 +25,7 @@ from protocol import (
     CMD_GROUP_POLL, CMD_GROUP_LIST, CMD_GROUP_LEAVE, CMD_GROUP_KICK,
     CMD_GROUP_MEMBERS,
     CMD_FILE_HEADER, CMD_FILE_CHUNK, CMD_FILE_POLL, CMD_FILE_DOWNLOAD,
-    CMD_LIST_USERS,
+    CMD_LIST_USERS, CMD_DISK_REGISTER, CMD_DISK_LIST,
     b32encode, b32decode,
 )
 from crypto_utils import (
@@ -32,6 +33,7 @@ from crypto_utils import (
     poll_signing_input, fpoll_signing_input, glist_signing_input,
     reg_signing_input, gpoll_signing_input, ginvite_signing_input,
     gleave_signing_input, gkick_signing_input, gmembers_signing_input,
+    disk_register_signing_input,
 )
 
 # Бандл (X25519||Ed25519) и Ed25519-подпись — оба ровно 64 байта, значит их
@@ -130,6 +132,11 @@ class RelayServer:
         # Response-rate-limiting по заявленному источнику UDP-пакета (см. run()).
         self._udp_hits: dict[str, list[float]] = {}
         self._last_udp_sweep = time.time()
+
+        # Незавершённая сборка disk_pubkey (фаза C, см. _h_diskreg): один
+        # public_key не влезает в один DNS-запрос, шлётся по чанкам через
+        # несколько. user → ({seq: chunk}, last_seen_ts).
+        self._diskreg_pending: dict[str, tuple[dict, float]] = {}
 
     # ═══════════════════════════════════════════════════════════════════
     # Личные сообщения
@@ -516,6 +523,96 @@ class RelayServer:
         return 'MEMBERS:' + ','.join(members)
 
     # ═══════════════════════════════════════════════════════════════════
+    # Covert-транспорт через Яндекс.Диск (docs/traffic-analysis-plan.md, C)
+    # ═══════════════════════════════════════════════════════════════════
+
+    MAX_DISKREG_CHUNKS = 8   # с запасом: реальный public_key укладывается в 2
+
+    def _h_diskreg(self, L: list[str]) -> str:
+        # Промежуточный чанк:  y.<user>.<seq>.<n>.<chunk_b32>
+        # Финальный (seq==n-1): y.<user>.<seq>.<n>.<chunk_b32>.<nonce>.<ts>.<sig_b32-лейблы…>
+        # Один public_key (raw ~64 байта) + подпись (64 байта) в b32 не влезают
+        # в один DNS-запрос (qname > 253 симв.) — поэтому многочанковая сборка,
+        # как у CMD_SEND/CMD_FILE_CHUNK, а не единый запрос, как у CMD_REGISTER.
+        # Подпись покрывает хэш pubkey (disk_register_signing_input), а не сам
+        # pubkey — привязывает её к точному значению, не к факту "что-то отправил".
+        if len(L) < 4:
+            return 'ERR:bad_diskreg'
+        user = L[0]
+        try:
+            seq, n = int(L[1]), int(L[2])
+        except ValueError:
+            return 'ERR:bad_diskreg'
+        if n <= 0 or n > self.MAX_DISKREG_CHUNKS or seq < 0 or seq >= n:
+            return 'ERR:bad_diskreg'
+        chunk = L[3]
+
+        with self.lock:
+            entry = self.users.get(user)
+        # Регистрация привязки к личности имеет смысл только для ЗАКРЕПЛЁННОГО
+        # имени — для незакреплённого некому доверять, что это правда "тот"
+        # пользователь; тут (в отличие от gleave/gmembers) требование строгое,
+        # т.к. подмена чужого disk_pubkey перенаправила бы его будущий covert
+        # fallback-трафик мосту, читающему НЕ ту папку.
+        if not (entry and entry.get('pinned')):
+            return 'ERR:unpinned'
+
+        with self.lock:
+            if len(self._diskreg_pending) > 500 and user not in self._diskreg_pending:
+                return 'ERR:busy'   # грубый предохранитель от флуда чужими user
+            chunks, _ts = self._diskreg_pending.get(user, ({}, 0.0))
+            # seq==0 всегда начинает новую попытку — не накапливаем мусор
+            # от предыдущей оборванной регистрации того же пользователя.
+            if seq == 0:
+                chunks = {}
+            chunks[seq] = chunk
+            self._diskreg_pending[user] = (chunks, time.time())
+
+        if len(L) == 4:
+            return 'OK:chunk'   # промежуточный — подпись только в финальном
+        if seq != n - 1:
+            return 'ERR:bad_diskreg'   # подпись допустима только в последнем чанке
+        if len(chunks) != n or any(i not in chunks for i in range(n)):
+            return 'ERR:incomplete'   # какой-то из чанков ещё не дошёл
+        if len(L) < 7:
+            return 'ERR:bad_diskreg'
+        nonce, ts = L[4], L[5]
+        if not ts.isdigit():
+            return 'ERR:bad_diskreg'
+        try:
+            sig = b32decode(''.join(L[6:]))
+            pubkey_raw = b32decode(''.join(chunks[i] for i in range(n)))
+            pubkey = base64.b64encode(pubkey_raw).decode('ascii')
+        except Exception:
+            return 'ERR:bad_diskreg'
+        if abs(time.time() - int(ts)) > POLL_TS_WINDOW:
+            return 'ERR:auth'
+        _x, ed_pub = split_bundle(entry['bundle'])
+        if len(sig) != 64 or not verify_sig(
+                ed_pub, disk_register_signing_input(user, pubkey, nonce, ts), sig):
+            return 'ERR:auth'
+        if not self._accept_poll_nonce(f'diskreg:{user}', nonce):
+            return 'ERR:replay'
+        with self.lock:
+            entry['disk_pubkey'] = pubkey
+            self._diskreg_pending.pop(user, None)
+        return 'OK'
+
+    def _h_disklist(self, L: list[str]) -> str:
+        # z (без параметров) — реестр читает только мост (по loopback, тот
+        # же trust model, что у остального relay: сам relay не различает
+        # "локальный" и "внешний" запрос на уровне handle_query). Не более
+        # чувствительно, чем остальной трафик: username и так виден в
+        # открытую в каждой команде протокола (см. traffic-analysis-plan.md).
+        with self.lock:
+            entries = [(u, e['disk_pubkey']) for u, e in self.users.items()
+                       if e.get('disk_pubkey')]
+        if not entries:
+            return 'EMPTY'
+        parts = [f'{u}:{b32encode(pk.encode("utf-8"))}' for u, pk in entries]
+        return 'OK:' + ','.join(parts)
+
+    # ═══════════════════════════════════════════════════════════════════
     # Файлы
     # ═══════════════════════════════════════════════════════════════════
 
@@ -713,6 +810,14 @@ class RelayServer:
                 else:
                     del self.mailbox[user]
 
+            # 4. Незавершённая сборка disk_pubkey — по TTL (та же ASSEMBLY_TTL,
+            # что и у сборки сообщений: недособранная регистрация — такой же
+            # мусор от прерванного клиента).
+            stale_dr = [u for u, (_c, ts) in self._diskreg_pending.items()
+                        if now - ts > ASSEMBLY_TTL]
+            for u in stale_dr:
+                del self._diskreg_pending[u]
+
     def _assemble(self, mid, seq, total, data_b32, fr_u, dest,
                   chunks_store, meta_store, mail_store, is_group=False):
         """Собирает чанки сообщения и кладёт в почтовый ящик.
@@ -789,6 +894,8 @@ class RelayServer:
         CMD_FILE_POLL:     '_h_fpoll',
         CMD_FILE_DOWNLOAD: '_h_fdownload',
         CMD_LIST_USERS:    '_h_list_users',
+        CMD_DISK_REGISTER: '_h_diskreg',
+        CMD_DISK_LIST:     '_h_disklist',
     }
 
     def handle_query(self, raw: bytes) -> bytes:

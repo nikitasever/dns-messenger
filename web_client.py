@@ -45,7 +45,7 @@ from protocol import (
     CMD_GROUP_POLL, CMD_GROUP_LIST, CMD_GROUP_LEAVE, CMD_GROUP_KICK,
     CMD_GROUP_MEMBERS,
     CMD_FILE_HEADER, CMD_FILE_CHUNK, CMD_FILE_POLL, CMD_FILE_DOWNLOAD,
-    CMD_LIST_USERS,
+    CMD_LIST_USERS, CMD_DISK_REGISTER,
     MAX_LABEL_LEN, MAX_DOMAIN_LEN, NONCE_OVERHEAD,
     b32encode, b32decode, chunk_string, gen_msg_id, gen_nonce,
 )
@@ -56,6 +56,7 @@ from crypto_utils import (
     poll_signing_input, fpoll_signing_input, glist_signing_input,
     reg_signing_input, gpoll_signing_input, ginvite_signing_input,
     gleave_signing_input, gkick_signing_input, gmembers_signing_input,
+    disk_register_signing_input,
     _derive_identity_key, safety_number, format_safety_number,
 )
 from ratchet import (
@@ -1328,6 +1329,31 @@ class UserMessenger:
                 continue     # первое наблюдение — не с чем сравнивать
             if set(members) < prev and self.username == min(members):
                 self.rekey_group(gid)
+
+    def register_disk_pubkey(self, pubkey: str) -> bool:
+        """Регистрирует public_key своей папки на Яндекс.Диске как fallback
+        covert-канал на случай недоступности прямого DNS/DoH (фаза C,
+        docs/traffic-analysis-plan.md). Шлётся, пока обычный транспорт ещё
+        работает — "на чёрный день"; disk_bridge.py на стороне relay читает
+        реестр через CMD_DISK_LIST и находит по нему папку клиента.
+
+        pubkey (~88-символьная base64-строка от Яндекс.Диска) вместе с
+        подписью не влезает в один DNS-запрос (qname > 253 симв.) — поэтому
+        раскодируем её в сырые байты (втрое компактнее в b32, чем гнать
+        текст base64 как есть) и шлём по чанкам несколькими запросами,
+        как CMD_SEND/CMD_FILE_CHUNK, а не одним, как CMD_REGISTER."""
+        raw = base64.b64decode(pubkey)
+        chunks = chunk_string(b32encode(raw), MAX_LABEL_LEN)
+        n = len(chunks)
+        for seq, chunk in enumerate(chunks[:-1]):
+            if self._q([CMD_DISK_REGISTER, self.username, str(seq), str(n), chunk]) != 'OK:chunk':
+                return False
+        nonce = gen_nonce()
+        ts = str(int(time.time()))
+        sig = self.identity.sign(disk_register_signing_input(self.username, pubkey, nonce, ts))
+        sig_chunks = chunk_string(b32encode(sig), MAX_LABEL_LEN)
+        last = [CMD_DISK_REGISTER, self.username, str(n - 1), str(n), chunks[-1], nonce, ts] + sig_chunks
+        return self._q(last) == 'OK'
 
     def send_file(self, to_user: str, filename: str, data: bytes) -> dict:
         pk = self.get_peer_key(to_user)

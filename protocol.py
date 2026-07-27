@@ -73,6 +73,10 @@ CMD_FILE_DOWNLOAD = 'x'
 # Пользователи
 CMD_LIST_USERS    = 'u'
 
+# Covert-транспорт через Яндекс.Диск (docs/traffic-analysis-plan.md, фаза C)
+CMD_DISK_REGISTER = 'y'   # клиент регистрирует public_key своей папки на Диске
+CMD_DISK_LIST     = 'z'   # мост запрашивает весь реестр {user: public_key}
+
 
 # ── Кодирование ─────────────────────────────────────────────────────
 

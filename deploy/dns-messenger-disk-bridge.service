@@ -1,0 +1,19 @@
+[Unit]
+Description=DNS Messenger — Yandex.Disk covert-channel bridge (docs/traffic-analysis-plan.md, phase C)
+After=network.target dns-messenger.service
+Requires=dns-messenger.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/dns-messenger
+# Тот же DNS_DOMAIN и RELAY_PORT, что в dns-messenger.service — мост должен
+# слать УЖЕ ЗАПУЩЕННОМУ relay-процессу, не поднимать свой (см. disk_bridge.py).
+Environment=YANDEX_DISK_TOKEN=changeme
+ExecStart=/opt/dns-messenger/venv/bin/python /opt/dns-messenger/disk_bridge.py --domain msg.tunnel.local --relay-host 127.0.0.1 --relay-port 15353
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/dns-messenger-disk-bridge.log
+StandardError=append:/var/log/dns-messenger-disk-bridge.log
+
+[Install]
+WantedBy=multi-user.target
