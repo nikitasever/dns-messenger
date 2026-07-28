@@ -2827,6 +2827,27 @@ html[data-list-wallpaper="snow"] #chat-list {
 .chat-item.chat-pinned { background: rgba(0,168,132,0.05); }
 .chat-item .chat-pin-icon { font-size: 11px; opacity: 0.7; }
 
+/* Pinned-chat drag-to-reorder handle - grabbing it (not the row) is what
+   starts a reorder, so it can't collide with the row's own swipe/long-press
+   pin gesture. touch-action:none stops the browser treating a touch-drag on
+   it as a page scroll. */
+.pin-drag-handle {
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1;
+    padding: 4px 2px;
+    touch-action: none;
+    flex-shrink: 0;
+    user-select: none;
+}
+.pin-drag-handle:hover { color: var(--text-secondary); }
+.chat-item.dragging {
+    opacity: 0.6;
+    background: var(--bg-hover);
+    cursor: grabbing;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    Sprint 3 — emoji picker, link preview, upload progress
    ═══════════════════════════════════════════════════════════════════ */

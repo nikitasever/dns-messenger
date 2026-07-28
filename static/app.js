@@ -629,6 +629,16 @@ function toggleChatPin(id) {
     const chat = state.chats[id];
     if (!chat) return;
     chat.chatPinned = !chat.chatPinned;
+    if (chat.chatPinned) {
+        // New pins go to the bottom of the pinned group, not the top -
+        // matches where a freshly-dragged-in item would land in most
+        // reorderable lists, and avoids bumping an existing manual order
+        // the user just set up.
+        const maxOrder = Object.values(state.chats)
+            .filter(c => c.chatPinned && c !== chat)
+            .reduce((m, c) => Math.max(m, c.pinOrder || 0), 0);
+        chat.pinOrder = maxOrder + 1;
+    }
     saveState();
     renderChatList();
     toast(chat.chatPinned ? (t('chat_pinned') || 'Чат закреплён') : (t('chat_unpinned') || 'Чат откреплён'), 'success');
@@ -660,6 +670,9 @@ function renderChatList() {
             const pa = a[1].chatPinned ? 1 : 0;
             const pb = b[1].chatPinned ? 1 : 0;
             if (pa !== pb) return pb - pa;
+            // Within the pinned group, respect manual drag order instead of
+            // recency - that's the whole point of pinning something.
+            if (pa && pb) return (a[1].pinOrder || 0) - (b[1].pinOrder || 0);
             return b[1].lastTs - a[1].lastTs;
         });
 
@@ -681,9 +694,11 @@ function renderChatList() {
 
         const div = document.createElement('div');
         div.className = `chat-item${isActive ? ' active' : ''}${chat.chatPinned ? ' chat-pinned' : ''}`;
+        div.dataset.chatId = id;
         div.onclick = () => selectChat(id);
         div.oncontextmenu = (e) => { e.preventDefault(); toggleChatPin(id); };
         div.innerHTML = `
+            ${chat.chatPinned ? '<span class="pin-drag-handle" title="Перетащить">⠿</span>' : ''}
             ${avatarHtml(chat.name, isGroup)}
             <div class="chat-info">
                 <div class="chat-name-row">
@@ -706,6 +721,9 @@ function renderChatList() {
         let swipeStartX = 0, swipeStartY = 0, chatSwiping = false, chatSwipeFired = false;
         const CHAT_SWIPE_THRESHOLD = 70;
         div.addEventListener('touchstart', (e) => {
+            // The drag handle runs its own pointer-based reorder - don't
+            // also arm the swipe/long-press-to-pin gesture underneath it.
+            if (e.target.closest('.pin-drag-handle')) return;
             const t0 = e.touches[0];
             swipeStartX = t0.clientX; swipeStartY = t0.clientY;
             chatSwiping = true; chatSwipeFired = false;
@@ -738,6 +756,65 @@ function renderChatList() {
     }
     updateBadges();
 }
+
+// ── Pinned-chat drag reorder ─────────────────────────────────────────
+// Pointer Events (not separate touch/mouse handlers, unlike the swipe
+// gestures above) since this needs one continuous drag path either way,
+// and doing it twice would double an already-fiddly piece of code. Only
+// starts from the .pin-drag-handle grip - a plain drag on the row itself
+// would collide with the swipe-to-pin/long-press-to-pin gestures chat
+// items already have.
+(function initPinDragReorder() {
+    let dragEl = null;
+
+    function onPointerDown(e) {
+        const handle = e.target.closest('.pin-drag-handle');
+        if (!handle) return;
+        const item = handle.closest('.chat-item');
+        if (!item) return;
+        e.preventDefault();
+        dragEl = item;
+        dragEl.classList.add('dragging');
+        handle.setPointerCapture(e.pointerId);
+    }
+
+    function onPointerMove(e) {
+        if (!dragEl) return;
+        // Only reorder against other pinned rows - dragging past the
+        // pinned/unpinned boundary doesn't unpin anything, it just has
+        // nothing left to swap with.
+        const siblings = [...$chatList.querySelectorAll('.chat-item.chat-pinned')].filter(el => el !== dragEl);
+        for (const sib of siblings) {
+            const r = sib.getBoundingClientRect();
+            const mid = r.top + r.height / 2;
+            const sibIsAfter = !!(dragEl.compareDocumentPosition(sib) & Node.DOCUMENT_POSITION_FOLLOWING);
+            if (sibIsAfter && e.clientY > mid) {
+                $chatList.insertBefore(dragEl, sib.nextSibling);
+                break;
+            } else if (!sibIsAfter && e.clientY < mid) {
+                $chatList.insertBefore(dragEl, sib);
+                break;
+            }
+        }
+    }
+
+    function onPointerUp() {
+        if (!dragEl) return;
+        dragEl.classList.remove('dragging');
+        // Persist whatever order the drag left the pinned rows in.
+        [...$chatList.querySelectorAll('.chat-item.chat-pinned')].forEach((el, i) => {
+            const chat = state.chats[el.dataset.chatId];
+            if (chat) chat.pinOrder = i;
+        });
+        saveState();
+        dragEl = null;
+    }
+
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('pointermove', onPointerMove);
+    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointercancel', onPointerUp);
+})();
 
 // ── Render: Header ──────────────────────────────────────────────────
 function renderHeader() {
