@@ -4308,37 +4308,65 @@ function handleEditCommand(chatId, text) {
 }
 
 // ── Drag & Drop ─────────────────────────────────────────────────────
+// The listeners are on document (a drag can start over the sidebar, a
+// message, anywhere), so which pane a drop belongs to is resolved from
+// the drop target itself: over pane B's chat area targets pane B,
+// everything else defaults to pane A - same as it always has.
 const $dropOverlay = $('#drop-overlay');
+const $dropOverlayB = document.getElementById('drop-overlay-b');
 let dragCounter = 0;
+
+function paneForDropTarget(target) {
+    if (paneB && target?.closest?.('#chat-area-b')) return paneB;
+    return paneA;
+}
+function overlayFor(pane) { return pane === paneA ? $dropOverlay : $dropOverlayB; }
 
 document.addEventListener('dragenter', (e) => {
     e.preventDefault();
     dragCounter++;
-    if (state.currentChat && $dropOverlay) $dropOverlay.classList.add('active');
+    const pane = paneForDropTarget(e.target);
+    if (pane.currentChat) overlayFor(pane)?.classList.add('active');
 });
 
 document.addEventListener('dragleave', (e) => {
     e.preventDefault();
     dragCounter--;
-    if (dragCounter <= 0) { dragCounter = 0; $dropOverlay?.classList.remove('active'); }
+    if (dragCounter <= 0) {
+        dragCounter = 0;
+        $dropOverlay?.classList.remove('active');
+        $dropOverlayB?.classList.remove('active');
+    }
 });
 
-document.addEventListener('dragover', (e) => e.preventDefault());
+// Fires continuously while dragging - used to swap which pane's overlay
+// is showing if the drag moves from over one pane's area to the other's.
+document.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const pane = paneForDropTarget(e.target);
+    const active = overlayFor(pane);
+    const inactive = pane === paneA ? $dropOverlayB : $dropOverlay;
+    inactive?.classList.remove('active');
+    if (pane.currentChat) active?.classList.add('active');
+});
 
 document.addEventListener('drop', async (e) => {
     e.preventDefault();
     dragCounter = 0;
     $dropOverlay?.classList.remove('active');
-    if (!state.currentChat || !e.dataTransfer.files.length) return;
+    $dropOverlayB?.classList.remove('active');
+    const pane = paneForDropTarget(e.target);
+    if (!pane.currentChat || !e.dataTransfer.files.length) return;
 
     const file = e.dataTransfer.files[0];
     const ts = Date.now();
-    addMessage(state.currentChat.id, { from: state.username, file: file.name, size: file.size, ts });
-    renderMessages();
+    addMessage(pane.currentChat.id, { from: state.username, file: file.name, size: file.size, ts });
+    pane.forceBottom = true;
+    renderMessagesForPane(pane);
     renderChatList();
 
     const fd = new FormData();
-    fd.append('to', state.currentChat.id);
+    fd.append('to', pane.currentChat.id);
     fd.append('file', file);
 
     try {
