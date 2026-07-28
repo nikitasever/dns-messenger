@@ -901,15 +901,20 @@ function renderChatList() {
         const isActive = state.currentChat?.id === id;
         const isGroup = chat.type === 'group';
         const lastMsg = chat.messages[chat.messages.length - 1];
-        let preview = '';
+        // previewSender is kept separate from the body (rather than one
+        // concatenated string) so it can render as its own styled span -
+        // group chats otherwise read as an undifferentiated wall of text
+        // where you can't tell who sent the last message at a glance.
+        let previewSender = '', previewBody = '';
         if (lastMsg) {
-            if (lastMsg.system) preview = lastMsg.text;
+            if (lastMsg.system) previewBody = lastMsg.text;
             else {
-                const sender = lastMsg.from === state.username ? t('you_prefix') : (isGroup ? lastMsg.from + ': ' : '');
+                previewSender = lastMsg.from === state.username ? t('you_prefix') : (isGroup ? lastMsg.from + ': ' : '');
                 // bodyOf strips the "> name: quoted\n" reply prefix and labels voice/video/file
-                preview = sender + bodyOf(lastMsg);
+                previewBody = bodyOf(lastMsg);
             }
         }
+        const previewBudget = Math.max(10, 80 - previewSender.length);
         const timeStr = lastMsg ? formatTime(lastMsg.ts) : '';
 
         const div = document.createElement('div');
@@ -933,7 +938,7 @@ function renderChatList() {
                 <div class="chat-name-row">
                     <span class="chat-name">${esc(chat.name)}</span>
                 </div>
-                <div class="chat-preview">${esc(preview.slice(0, 80))}</div>
+                <div class="chat-preview">${previewSender ? `<span class="preview-sender">${esc(previewSender)}</span>` : ''}${esc(previewBody.slice(0, previewBudget))}</div>
             </div>
             <div class="chat-meta">
                 ${chat.chatPinned ? '<span class="chat-pin-icon">📌</span>' : ''}
