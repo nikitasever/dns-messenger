@@ -1786,6 +1786,33 @@ applySettings();
     });
 })();
 
+// ── Avatar 3D tilt ────────────────────────────────────────────────────
+// Delegated on document (not per-element listeners) since avatars are
+// re-created constantly by renderChatList()/renderMessages() innerHTML
+// replaces - attaching directly to each .avatar would mean rebinding on
+// every re-render.
+(function initAvatarTilt() {
+    if (!window.matchMedia('(hover: hover)').matches) return; // no hover on touch
+    const MAX_TILT = 14;
+    document.addEventListener('mousemove', (e) => {
+        const el = e.target.closest && e.target.closest('.avatar');
+        if (!el) return;
+        if (document.documentElement.classList.contains('no-anim')) return;
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const rect = el.getBoundingClientRect();
+        const px = (e.clientX - rect.left) / rect.width - 0.5;
+        const py = (e.clientY - rect.top) / rect.height - 0.5;
+        const rx = (-py * MAX_TILT).toFixed(1);
+        const ry = (px * MAX_TILT).toFixed(1);
+        el.style.transform = `perspective(300px) rotateX(${rx}deg) rotateY(${ry}deg)`;
+    });
+    document.addEventListener('mouseout', (e) => {
+        const el = e.target.closest && e.target.closest('.avatar');
+        if (!el || el.contains(e.relatedTarget)) return;
+        el.style.transform = '';
+    });
+})();
+
 function showSettings(initialSection) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay settings-overlay';

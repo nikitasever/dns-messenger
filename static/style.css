@@ -230,6 +230,7 @@ body {
     flex-shrink: 0;
     color: #fff;
     position: relative;
+    transition: transform 0.15s var(--ease-out);
 }
 
 .avatar.sm {
