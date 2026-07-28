@@ -2055,10 +2055,10 @@ button:active, .btn:active { transform: scale(0.94); }
 .fab-btn:hover { animation: none; transform: scale(1.08) rotate(8deg); }
 
 /* Avatars — gentle hover */
-.avatar, .avatar-sm, .avatar-md, .avatar-lg {
+.avatar {
     transition: transform 0.25s ease, box-shadow 0.25s ease;
 }
-.avatar:hover, .avatar-sm:hover, .avatar-md:hover, .avatar-lg:hover {
+.avatar:hover {
     transform: scale(1.06);
 }
 
