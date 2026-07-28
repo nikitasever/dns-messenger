@@ -2345,6 +2345,34 @@ applySettings();
     });
 })();
 
+// ── Message bubble 3D tilt ────────────────────────────────────────────
+// Same delegated approach as avatar tilt, but subtler (bubbles are big
+// content-shaped rectangles, not small circles) and left alone mid-swipe:
+// .holding marks an active drag/long-press, which manages transform (and
+// its own snap-back transition) itself - fighting it here with an
+// untransitioned rotate would visibly stutter the swipe-to-reply gesture.
+(function initMessageTilt() {
+    if (!window.matchMedia('(hover: hover)').matches) return; // no hover on touch
+    const MAX_TILT = 4;
+    document.addEventListener('mousemove', (e) => {
+        const el = e.target.closest && e.target.closest('.message');
+        if (!el || el.classList.contains('holding')) return;
+        if (document.documentElement.classList.contains('no-anim')) return;
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const rect = el.getBoundingClientRect();
+        const px = (e.clientX - rect.left) / rect.width - 0.5;
+        const py = (e.clientY - rect.top) / rect.height - 0.5;
+        const rx = (-py * MAX_TILT).toFixed(1);
+        const ry = (px * MAX_TILT).toFixed(1);
+        el.style.transform = `perspective(500px) rotateX(${rx}deg) rotateY(${ry}deg)`;
+    });
+    document.addEventListener('mouseout', (e) => {
+        const el = e.target.closest && e.target.closest('.message');
+        if (!el || el.contains(e.relatedTarget) || el.classList.contains('holding')) return;
+        el.style.transform = '';
+    });
+})();
+
 // ── Command palette (Ctrl+K) ─────────────────────────────────────────
 let cmdkItems = [];
 let cmdkActive = 0;
