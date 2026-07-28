@@ -1222,7 +1222,7 @@ body {
         inset: 0;
         z-index: 10;
         transform: translateX(0);
-        transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+        transition: transform 0.3s var(--ease-spring);
     }
 
     .chat-area {
@@ -1232,7 +1232,7 @@ body {
         z-index: 11;
         display: flex;
         transform: translateX(100%);
-        transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+        transition: transform 0.3s var(--ease-spring);
     }
 
     /* When a chat is open on mobile */
@@ -1893,7 +1893,7 @@ body {
 .tab.active { animation: scaleIn 0.25s ease; }
 
 /* Sidebar / drawer slide-in */
-.drawer { transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+.drawer { transition: transform 0.32s var(--ease-spring); }
 .drawer-item {
     transition: background 0.18s ease, padding-left 0.18s ease, transform 0.18s ease;
 }
@@ -1938,7 +1938,7 @@ button:active, .btn:active { transform: scale(0.94); }
 
 /* Modals — already have modalIn, add backdrop fade */
 .modal-backdrop, .modal-overlay { animation: fadeIn 0.2s ease; }
-.modal { animation: bounceIn 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
+.modal { animation: bounceIn 0.35s var(--ease-spring) both; }
 
 /* Toasts slide */
 .toast { animation: slideInRight 0.3s ease both; }
