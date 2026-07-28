@@ -1125,9 +1125,9 @@ function buildMessageNode(msg, isNew, isGroup, pane) {
 
     // Data attributes for context menu
     div.dataset.msgId = msg.id || '';
-    div.dataset.chatId = state.currentChat.id;
+    div.dataset.chatId = pane.currentChat.id;
 
-    const reactionsHtml = renderReactions(msg);
+    const reactionsHtml = renderReactions(msg, pane);
 
         // Detect a leading reply quote of the form "> name: text\n..." and split it out.
         // qName/qText come straight from the message's own (fully attacker-controlled)
@@ -1249,6 +1249,12 @@ function buildMessageNode(msg, isNew, isGroup, pane) {
         const curChat = pane.currentChat && state.chats[pane.currentChat.id];
         if (curChat && curChat.pinnedId === msg.id) div.classList.add('is-pinned');
 
+        // Context menu on right-click - works in both panes (reactions,
+        // copy/pin/delete/forward/info are pane-aware via ctxTargetPane).
+        // Reply/Edit hide themselves inside showContextMenu when pane !== paneA,
+        // since the composer bar they need only exists in pane A so far.
+        div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg, pane); });
+
         if (pane === paneA) {
             // Search/pinned highlight - data-driven off chatSearchMatches/pinnedId
             // rather than a post-render DOM query, so it stays correct however the
@@ -1269,9 +1275,6 @@ function buildMessageNode(msg, isNew, isGroup, pane) {
                     scrollToQuoted(replyQName, replyQText);
                 });
             }
-
-            // Context menu on right-click and long-press
-            div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg); });
 
             // Swipe-to-reply (Telegram-like) + long-press context menu
             let longPressTimer;
@@ -3555,11 +3558,13 @@ async function playVideoMsg(btn) {
 // ═══════════════════════════════════════════════════════════════════
 
 let ctxTargetMsg = null;
+let ctxTargetPane = null;
 let ctxOpenedAt = 0;
 const $ctxMenu = document.getElementById('msg-context-menu');
 
-function showContextMenu(e, msg) {
+function showContextMenu(e, msg, pane = paneA) {
     ctxTargetMsg = msg;
+    ctxTargetPane = pane;
     ctxOpenedAt = Date.now();
     if (!$ctxMenu) return;
 
@@ -3570,16 +3575,20 @@ function showContextMenu(e, msg) {
         if (el) el.classList.add('selected');
     }
 
+    // Reply/Edit need the composer bar, which only exists in pane A so far.
+    const replyBtn = document.getElementById('ctx-reply-btn');
+    if (replyBtn) replyBtn.style.display = pane === paneA ? '' : 'none';
+
     // Show Edit only for own text messages
     const editBtn = document.getElementById('ctx-edit-btn');
     if (editBtn) {
-        const canEdit = msg && msg.from === state.username && !msg.voice && !msg.file && !msg.videoMsg && !msg.deleted;
+        const canEdit = pane === paneA && msg && msg.from === state.username && !msg.voice && !msg.file && !msg.videoMsg && !msg.deleted;
         editBtn.style.display = canEdit ? '' : 'none';
     }
     // Pin/Unpin label
     const pinBtn = document.getElementById('ctx-pin-btn');
     if (pinBtn) {
-        const chat = state.currentChat && state.chats[state.currentChat.id];
+        const chat = pane.currentChat && state.chats[pane.currentChat.id];
         const isPinned = chat && chat.pinnedId === (msg && msg.id);
         pinBtn.innerHTML = isPinned
             ? `<span>📌</span> ${t('unpin') || 'Открепить'}`
@@ -3703,13 +3712,13 @@ document.addEventListener('scroll', hideContextMenu, true);
 
 // ── Reactions ──────────────────────────────────────────────────────
 
-function renderReactions(msg) {
+function renderReactions(msg, pane) {
     if (!msg.reactions || Object.keys(msg.reactions).length === 0) return '';
     let html = '<div class="msg-reactions">';
     for (const [emoji, users] of Object.entries(msg.reactions)) {
         if (!users || users.length === 0) continue;
         const isMine = users.includes(state.username);
-        html += `<span class="reaction${isMine ? ' mine' : ''}" onclick="toggleReactionClick('${msg.id}','${emoji}',event)" title="${users.join(', ')}">${emoji}<span class="r-count">${users.length > 1 ? users.length : ''}</span></span>`;
+        html += `<span class="reaction${isMine ? ' mine' : ''}" onclick="toggleReactionClick('${msg.id}','${emoji}',event,'${pane.suffix}')" title="${users.join(', ')}">${emoji}<span class="r-count">${users.length > 1 ? users.length : ''}</span></span>`;
     }
     html += '</div>';
     return html;
@@ -3730,9 +3739,9 @@ function spawnReactionBurst(emoji, x, y) {
 }
 
 function addReaction(emoji, ev) {
-    if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
+    if (!ctxTargetMsg || !ctxTargetPane || !ctxTargetPane.currentChat) { hideContextMenu(); return; }
 
-    const chat = state.chats[state.currentChat.id];
+    const chat = state.chats[ctxTargetPane.currentChat.id];
     if (!chat) { hideContextMenu(); return; }
 
     const msg = chat.messages.find(m => m.id === ctxTargetMsg.id);
@@ -3836,9 +3845,10 @@ document.addEventListener('click', (e) => {
     picker.style.display = 'none';
 });
 
-function toggleReactionClick(msgId, emoji, ev) {
-    if (!state.currentChat) return;
-    const chat = state.chats[state.currentChat.id];
+function toggleReactionClick(msgId, emoji, ev, paneSuffix) {
+    const pane = paneSuffix === 'b' ? paneB : paneA;
+    if (!pane || !pane.currentChat) return;
+    const chat = state.chats[pane.currentChat.id];
     if (!chat) return;
 
     const msg = chat.messages.find(m => m.id === msgId);
@@ -3877,12 +3887,13 @@ function ctxEdit() {
 }
 
 function ctxForward() {
-    if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
+    if (!ctxTargetMsg || !ctxTargetPane || !ctxTargetPane.currentChat) { hideContextMenu(); return; }
     const msg = ctxTargetMsg;
+    const sourceChatId = ctxTargetPane.currentChat.id;
     hideContextMenu();
     // Build a chat picker
     const chats = Object.values(state.chats)
-        .filter(c => c.id !== state.currentChat.id)
+        .filter(c => c.id !== sourceChatId)
         .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -3923,7 +3934,7 @@ async function forwardMessageTo(chatId, msg) {
         if (!res.ok) { toast(res.error || t('send_error'), 'error'); return; }
         toast((t('forwarded_to') || 'Переслано в') + ' ' + chat.name, 'success');
         renderChatList();
-        if (state.currentChat?.id === chatId) renderMessages();
+        if (state.currentChat?.id === chatId || (paneB && paneB.currentChat?.id === chatId)) renderMessages();
     } catch (e) { toast(t('server_unavailable'), 'error'); }
 }
 
@@ -3939,8 +3950,8 @@ function ctxCopy() {
 }
 
 function ctxDelete() {
-    if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
-    const chat = state.chats[state.currentChat.id];
+    if (!ctxTargetMsg || !ctxTargetPane || !ctxTargetPane.currentChat) { hideContextMenu(); return; }
+    const chat = state.chats[ctxTargetPane.currentChat.id];
     if (!chat) { hideContextMenu(); return; }
 
     const idx = chat.messages.findIndex(m => m.id === ctxTargetMsg.id);
@@ -3996,7 +4007,7 @@ function ctxDelete() {
                     await fetch('/api/send', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ to: state.currentChat.id, text: `__DELETE__:${ctxTargetMsg.id}` }),
+                        body: JSON.stringify({ to: ctxTargetPane.currentChat.id, text: `__DELETE__:${ctxTargetMsg.id}` }),
                     });
                 } catch (e) {}
             }
@@ -4008,8 +4019,8 @@ function ctxDelete() {
 }
 
 function ctxPin() {
-    if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
-    const chat = state.chats[state.currentChat.id];
+    if (!ctxTargetMsg || !ctxTargetPane || !ctxTargetPane.currentChat) { hideContextMenu(); return; }
+    const chat = state.chats[ctxTargetPane.currentChat.id];
     if (!chat) { hideContextMenu(); return; }
     if (chat.pinnedId === ctxTargetMsg.id) {
         chat.pinnedId = null;
