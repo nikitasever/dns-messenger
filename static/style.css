@@ -2127,6 +2127,12 @@ button:active, .btn:active { transform: scale(0.94); }
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
+/* On the send button, the ring's default accent-colored top segment would
+   vanish against the button's own accent background. */
+.send-btn .spinner {
+    border-color: rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+}
 
 /* Context menu */
 .context-menu, .ctx-menu { animation: scaleIn 0.18s ease; transform-origin: top left; }

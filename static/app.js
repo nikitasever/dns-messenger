@@ -807,6 +807,7 @@ async function sendMessageInPane(pane) {
         ? { group: pane.currentChat.id, text }
         : { to: pane.currentChat.id, text };
 
+    setSendBtnSpinner(pane, true);
     try {
         const res = await fetch(url, {
             method: 'POST',
@@ -816,6 +817,8 @@ async function sendMessageInPane(pane) {
         if (!res.ok) toast(res.error || t('send_error'), 'error');
     } catch (e) {
         toast(t('server_unavailable'), 'error');
+    } finally {
+        setSendBtnSpinner(pane, false);
     }
 }
 
@@ -1588,6 +1591,22 @@ function renderMessagesForPane(pane) {
 }
 
 // ── Actions ─────────────────────────────────────────────────────────
+// Swaps the send button's arrow for a spinner while its fetch is in
+// flight - stashes the original innerHTML on first use so it can be
+// restored exactly, regardless of which pane's button this is.
+function setSendBtnSpinner(pane, spinning) {
+    const btn = pane.$sendBtn;
+    if (!btn) return;
+    if (spinning) {
+        if (btn.dataset.origHtml === undefined) btn.dataset.origHtml = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner"></span>';
+        btn.disabled = true;
+    } else {
+        if (btn.dataset.origHtml !== undefined) btn.innerHTML = btn.dataset.origHtml;
+        btn.disabled = false;
+    }
+}
+
 async function sendMessage() {
     if (!state.currentChat || !$msgInput.value.trim()) return;
     let text = $msgInput.value.trim();
@@ -1638,6 +1657,7 @@ async function sendMessage() {
         ? { group: state.currentChat.id, text }
         : { to: state.currentChat.id, text };
 
+    setSendBtnSpinner(paneA, true);
     try {
         const res = await fetch(url, {
             method: 'POST',
@@ -1648,6 +1668,8 @@ async function sendMessage() {
         if (!res.ok) toast(res.error || t('send_error'), 'error');
     } catch (e) {
         toast(t('server_unavailable'), 'error');
+    } finally {
+        setSendBtnSpinner(paneA, false);
     }
 }
 
