@@ -2256,8 +2256,21 @@ function setSetting(key, val) {
     localStorage.setItem(SETTINGS_KEYS[key] || key, String(val));
     applySettings();
 }
+// 'auto' isn't a real data-theme value (only dark/light/midnight have CSS
+// behind them) - it resolves to whichever of light/dark prefers-color-scheme
+// currently reports, re-evaluated live so switching in system settings
+// updates the app without a reload.
+const systemDarkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+function resolveTheme(theme) {
+    if (theme !== 'auto') return theme;
+    return systemDarkQuery.matches ? 'dark' : 'light';
+}
+systemDarkQuery.addEventListener('change', () => {
+    if (getSetting('theme', 'dark') === 'auto') applySettings();
+});
+
 function applySettings() {
-    const theme = getSetting('theme', 'dark');
+    const theme = resolveTheme(getSetting('theme', 'dark'));
     const accent = getSetting('accent', 'green');
     const scale = parseFloat(getSetting('fontScale', '1')) || 1;
     const animOn = getSetting('animations', true);
@@ -2783,6 +2796,7 @@ function buildSettingsSection(id) {
         return `
             <h4 class="set-section-title">Оформление</h4>
             ${selectRow('Тема', 'theme', 'dark', [
+                { val: 'auto',     label: '💻 Как в системе' },
                 { val: 'dark',     label: 'Тёмная' },
                 { val: 'light',    label: 'Светлая' },
                 { val: 'midnight', label: 'Полночь' },
