@@ -479,8 +479,7 @@ body {
     gap: 2px;
 }
 
-.header-actions button,
-.icon-btn {
+.header-actions button {
     width: 40px;
     height: 40px;
     background: transparent;
@@ -496,8 +495,7 @@ body {
     font-family: inherit;
 }
 
-.header-actions button:hover,
-.icon-btn:hover {
+.header-actions button:hover {
     background: var(--bg-hover);
     color: var(--text);
 }
@@ -1398,8 +1396,7 @@ body {
         flex-shrink: 0;
         gap: 0;
     }
-    .header-actions button,
-    .icon-btn {
+    .header-actions button {
         width: 36px;
         height: 36px;
         font-size: 16px;
@@ -1448,8 +1445,7 @@ body {
         padding: 4px 6px;
         gap: 6px;
     }
-    .header-actions button,
-    .icon-btn {
+    .header-actions button {
         width: 34px;
         height: 34px;
         font-size: 15px;
