@@ -3869,15 +3869,16 @@ const EMOJI_CATEGORIES = {
     '⚽': ['⚽','🏀','🏈','⚾','🎾','🏐','🏉','🎱','🏓','🏸','🥅','⛳','🎯','🎮','🎲','🎸','🎹','🥁','🎺','🎬','🎤','🚗','✈️','🚀','🏆','🥇','🎁','🎈','🎄','🔒','💡','📱','💻','⌚','📷','🔋','💰','💎'],
 };
 let emojiInsertPos = null;
-function toggleInputEmoji(ev) {
+function pickerIdFor(pane) { return pane === paneA ? 'input-emoji-picker' : 'input-emoji-picker-b'; }
+function toggleInputEmoji(ev, pane = paneA) {
     ev?.stopPropagation();
-    const picker = document.getElementById('input-emoji-picker');
+    const picker = document.getElementById(pickerIdFor(pane));
     if (!picker) return;
     if (picker.style.display !== 'none') { picker.style.display = 'none'; return; }
-    buildEmojiPicker(picker);
+    buildEmojiPicker(picker, pane);
     picker.style.display = '';
 }
-function buildEmojiPicker(picker) {
+function buildEmojiPicker(picker, pane = paneA) {
     const cats = Object.keys(EMOJI_CATEGORIES);
     picker.innerHTML = `
         <div class="emoji-tabs">${cats.map((c, i) => `<button class="emoji-tab${i===0?' active':''}" data-cat="${c}">${c}</button>`).join('')}</div>
@@ -3895,11 +3896,11 @@ function buildEmojiPicker(picker) {
     });
     grid.onclick = (e) => {
         const cell = e.target.closest('.emoji-cell');
-        if (cell) insertEmoji(cell.textContent);
+        if (cell) insertEmoji(cell.textContent, pane);
     };
 }
-function insertEmoji(emoji) {
-    const inp = $msgInput;
+function insertEmoji(emoji, pane = paneA) {
+    const inp = pane.$msgInput;
     if (!inp) return;
     const start = inp.selectionStart ?? inp.value.length;
     const end = inp.selectionEnd ?? inp.value.length;
@@ -3909,12 +3910,16 @@ function insertEmoji(emoji) {
     inp.setSelectionRange(pos, pos);
     inp.dispatchEvent(new Event('input', { bubbles: true }));
 }
-// Close emoji picker when clicking elsewhere
+// Close emoji picker(s) when clicking elsewhere
 document.addEventListener('click', (e) => {
-    const picker = document.getElementById('input-emoji-picker');
-    if (!picker || picker.style.display === 'none') return;
-    if (e.target.closest('#input-emoji-picker') || e.target.closest('#emoji-btn')) return;
-    picker.style.display = 'none';
+    for (const pane of [paneA, paneB]) {
+        if (!pane) continue;
+        const picker = document.getElementById(pickerIdFor(pane));
+        const btnId = pane === paneA ? 'emoji-btn' : 'emoji-btn-b';
+        if (!picker || picker.style.display === 'none') continue;
+        if (e.target.closest(`#${pickerIdFor(pane)}`) || e.target.closest(`#${btnId}`)) continue;
+        picker.style.display = 'none';
+    }
 });
 
 function toggleReactionClick(msgId, emoji, ev, paneSuffix) {
