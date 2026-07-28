@@ -410,6 +410,7 @@ const paneA = {
     scrollRenderQueued: false,
     forceBottom: false,
     replyingTo: null,
+    editingMsg: null,
     searchMatches: [], searchIdx: -1,
     typingSentAt: 0, typingStopTimer: null,
 };
@@ -432,6 +433,7 @@ function ensurePaneB() {
         scrollRenderQueued: false,
         forceBottom: false,
         replyingTo: null,
+        editingMsg: null,
         searchMatches: [], searchIdx: -1,
         typingSentAt: 0, typingStopTimer: null,
     };
@@ -744,12 +746,33 @@ async function sendMessageInPane(pane) {
     }
     pane.$msgInput.style.height = 'auto';
 
+    const chat = state.chats[pane.currentChat.id];
+
+    // ── Edit mode ──
+    if (pane.editingMsg) {
+        const target = pane.editingMsg;
+        hideComposerBar(pane);
+        target.text = text;
+        target.edited = true;
+        saveState();
+        renderMessagesForPane(pane);
+        renderChatList();
+        if (chat.type === 'dm') {
+            try {
+                await fetch('/api/send', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to: pane.currentChat.id, text: `__EDIT__:${target.id}:${text}` }),
+                });
+            } catch (e) {}
+        }
+        return;
+    }
+
     if (pane.replyingTo) {
         text = `> ${pane.replyingTo.from}: ${pane.replyingTo.text.slice(0, 60)}\n${text}`;
         hideComposerBar(pane);
     }
 
-    const chat = state.chats[pane.currentChat.id];
     const ts = Date.now();
     addMessage(pane.currentChat.id, { from: state.username, text, ts });
     pane.forceBottom = true;
@@ -1532,8 +1555,8 @@ async function sendMessage() {
     const chat = state.chats[state.currentChat.id];
 
     // ── Edit mode ──
-    if (editingMsg) {
-        const target = editingMsg;
+    if (paneA.editingMsg) {
+        const target = paneA.editingMsg;
         hideComposerBar();
         target.text = text;
         target.edited = true;
@@ -3619,15 +3642,14 @@ function showContextMenu(e, msg, pane = paneA) {
         if (el) el.classList.add('selected');
     }
 
-    // Reply now has its own composer bar in both panes. Edit stays pane-A-only
-    // (no dedicated edit flow built for pane B yet).
+    // Reply and Edit both have their own composer bar in each pane now.
     const replyBtn = document.getElementById('ctx-reply-btn');
     if (replyBtn) replyBtn.style.display = '';
 
-    // Show Edit only for own text messages, and only in pane A
+    // Show Edit only for own text messages
     const editBtn = document.getElementById('ctx-edit-btn');
     if (editBtn) {
-        const canEdit = pane === paneA && msg && msg.from === state.username && !msg.voice && !msg.file && !msg.videoMsg && !msg.deleted;
+        const canEdit = msg && msg.from === state.username && !msg.voice && !msg.file && !msg.videoMsg && !msg.deleted;
         editBtn.style.display = canEdit ? '' : 'none';
     }
     // Pin/Unpin label
@@ -3661,9 +3683,8 @@ function hideContextMenu() {
 }
 
 // ── Reply / Edit composer ───────────────────────────────────────────
-// replyingTo lives on each pane (pane.replyingTo) so pane A and pane B can
-// each have their own reply-in-progress. Edit stays paneA-only (below).
-let editingMsg = null;   // message object being edited - always pane A
+// replyingTo/editingMsg both live on each pane so pane A and pane B can
+// each have their own reply/edit-in-progress independently.
 
 function bodyOf(msg) {
     let b = msg.text || (msg.voice ? '🎤 ' + t('label_voice') : '') || (msg.videoMsg ? '🎥 ' + t('label_video') : '') || (msg.file ? '📎 ' + msg.file : '');
@@ -3683,7 +3704,7 @@ function ensureComposerBar(pane) {
 }
 function hideComposerBar(pane = paneA) {
     pane.replyingTo = null;
-    if (pane === paneA) editingMsg = null;
+    pane.editingMsg = null;
     document.getElementById(pane === paneA ? 'composer-bar' : 'composer-bar-b')?.remove();
 }
 // Bridges the composer's inline onclick="" (a plain string, can't carry a
@@ -3709,7 +3730,7 @@ function showComposerBar(mode, msg, pane = paneA) {
 // Swipe-to-reply / context reply: open reply composer
 function startReply(msg, pane = paneA) {
     if (!msg) return;
-    if (pane === paneA) editingMsg = null;
+    pane.editingMsg = null;
     pane.replyingTo = { id: msg.id, from: msg.from, text: bodyOf(msg) };
     showComposerBar('reply', msg, pane);
     pane.$msgInput?.focus();
@@ -3717,15 +3738,15 @@ function startReply(msg, pane = paneA) {
     if (el) { el.classList.add('reply-flash'); setTimeout(() => el.classList.remove('reply-flash'), 700); }
 }
 
-function startEdit(msg) {
+function startEdit(msg, pane = paneA) {
     if (!msg || msg.from !== state.username) return;
-    paneA.replyingTo = null;
-    editingMsg = msg;
-    showComposerBar('edit', msg, paneA);
-    if ($msgInput) {
-        $msgInput.value = bodyOf(msg);
-        $msgInput.focus();
-        $msgInput.setSelectionRange($msgInput.value.length, $msgInput.value.length);
+    pane.replyingTo = null;
+    pane.editingMsg = msg;
+    showComposerBar('edit', msg, pane);
+    if (pane.$msgInput) {
+        pane.$msgInput.value = bodyOf(msg);
+        pane.$msgInput.focus();
+        pane.$msgInput.setSelectionRange(pane.$msgInput.value.length, pane.$msgInput.value.length);
     }
 }
 
@@ -3933,7 +3954,7 @@ function ctxEdit() {
     if (!ctxTargetMsg) { hideContextMenu(); return; }
     if (ctxTargetMsg.from !== state.username) { toast(t('edit_own_only') || 'Можно менять только свои сообщения', 'info'); hideContextMenu(); return; }
     if (ctxTargetMsg.voice || ctxTargetMsg.file || ctxTargetMsg.videoMsg) { toast(t('edit_text_only') || 'Можно менять только текстовые сообщения', 'info'); hideContextMenu(); return; }
-    startEdit(ctxTargetMsg);
+    startEdit(ctxTargetMsg, ctxTargetPane || paneA);
     hideContextMenu();
 }
 
@@ -4257,7 +4278,8 @@ function handleDeleteCommand(chatId, text) {
         msg.file = '';
         msg.voice = false;
         saveState();
-        if (state.currentChat?.id === chatId) renderMessages();
+        if (state.currentChat?.id === chatId) renderMessagesForPane(paneA);
+        if (paneB?.currentChat?.id === chatId) renderMessagesForPane(paneB);
         renderChatList();
     }
     return true;
@@ -4278,7 +4300,8 @@ function handleEditCommand(chatId, text) {
         msg.text = newText;
         msg.edited = true;
         saveState();
-        if (state.currentChat?.id === chatId) renderMessages();
+        if (state.currentChat?.id === chatId) renderMessagesForPane(paneA);
+        if (paneB?.currentChat?.id === chatId) renderMessagesForPane(paneB);
         renderChatList();
     }
     return true;
