@@ -106,6 +106,8 @@ const I18N = {
         https_required: 'Для {0} Chrome требует HTTPS. Откройте https://{1} и примите сертификат',
         calls_feature: 'звонков', voice_feature: 'голосовых сообщений',
         language: 'Язык',
+        cmd_placeholder: 'Поиск чатов и команд…', cmd_empty: 'Ничего не найдено',
+        cmd_chats: 'Чаты', cmd_actions: 'Команды',
     },
     en: {
         search: 'Search',
@@ -195,6 +197,8 @@ const I18N = {
         https_required: 'Chrome requires HTTPS for {0}. Open https://{1} and accept the certificate',
         calls_feature: 'calls', voice_feature: 'voice messages',
         language: 'Language',
+        cmd_placeholder: 'Search chats and commands…', cmd_empty: 'Nothing found',
+        cmd_chats: 'Chats', cmd_actions: 'Commands',
     },
 };
 
@@ -1812,6 +1816,135 @@ applySettings();
         el.style.transform = '';
     });
 })();
+
+// ── Command palette (Ctrl+K) ─────────────────────────────────────────
+let cmdkItems = [];
+let cmdkActive = 0;
+
+function cmdkActionList() {
+    return [
+        { icon: '\u{1F4AC}', label: t('new_chat'), run: () => showNewDM() },
+        { icon: '\u{1F465}', label: t('new_group'), run: () => showNewGroup() },
+        { icon: '\u{1F464}', label: t('contacts'), run: () => showContacts() },
+        { icon: '⚙', label: t('privacy'), run: () => showSettings() },
+        { icon: '⚙', label: t('admin_panel'), run: () => { window.location.href = '/admin'; } },
+        { icon: '\u{1F6AA}', label: t('logout'), run: () => doLogout() },
+    ];
+}
+
+function openCommandPalette() {
+    if (document.getElementById('cmdk-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay cmdk-overlay';
+    overlay.id = 'cmdk-overlay';
+    overlay.innerHTML = `
+        <div class="modal cmdk-modal">
+            <input type="text" class="cmdk-input" id="cmdk-input" placeholder="${esc(t('cmd_placeholder'))}" autocomplete="off" spellcheck="false">
+            <div class="cmdk-list" id="cmdk-list"></div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) closeCommandPalette(); });
+
+    const input = overlay.querySelector('#cmdk-input');
+    input.addEventListener('input', () => renderCommandPalette(input.value));
+    input.addEventListener('keydown', onCmdkKeydown);
+
+    const list = overlay.querySelector('#cmdk-list');
+    list.addEventListener('click', (e) => {
+        const item = e.target.closest('.cmdk-item');
+        if (item) runCommandItem(parseInt(item.dataset.idx, 10));
+    });
+    list.addEventListener('mousemove', (e) => {
+        const item = e.target.closest('.cmdk-item');
+        if (!item) return;
+        const idx = parseInt(item.dataset.idx, 10);
+        if (idx !== cmdkActive) { cmdkActive = idx; highlightCmdkActive(); }
+    });
+
+    renderCommandPalette('');
+    input.focus();
+}
+
+function closeCommandPalette() {
+    document.getElementById('cmdk-overlay')?.remove();
+}
+
+function renderCommandPalette(query) {
+    const q = query.trim().toLowerCase();
+    const list = document.getElementById('cmdk-list');
+    if (!list) return;
+
+    const chatMatches = Object.entries(state.chats)
+        .filter(([id, c]) => !q || (c.name || id).toLowerCase().includes(q))
+        .sort((a, b) => (b[1].lastTs || 0) - (a[1].lastTs || 0))
+        .slice(0, 8);
+    const actionMatches = cmdkActionList().filter(a => !q || a.label.toLowerCase().includes(q));
+
+    cmdkItems = [];
+    cmdkActive = 0;
+    let html = '';
+
+    if (chatMatches.length) {
+        html += `<div class="cmdk-section-label">${esc(t('cmd_chats'))}</div>`;
+        for (const [id, c] of chatMatches) {
+            const idx = cmdkItems.length;
+            cmdkItems.push({ run: () => selectChat(id) });
+            html += `<div class="cmdk-item" data-idx="${idx}">${avatarHtml(c.name || id, c.type === 'group', 'xs')}<span>${esc(c.name || id)}</span></div>`;
+        }
+    }
+    if (actionMatches.length) {
+        html += `<div class="cmdk-section-label">${esc(t('cmd_actions'))}</div>`;
+        for (const a of actionMatches) {
+            const idx = cmdkItems.length;
+            cmdkItems.push({ run: a.run });
+            html += `<div class="cmdk-item" data-idx="${idx}"><span class="cmdk-item-icon">${a.icon}</span><span>${esc(a.label)}</span></div>`;
+        }
+    }
+    if (!cmdkItems.length) {
+        html = `<div class="cmdk-empty">${esc(t('cmd_empty'))}</div>`;
+    }
+
+    list.innerHTML = html;
+    highlightCmdkActive();
+}
+
+function highlightCmdkActive() {
+    document.querySelectorAll('#cmdk-list .cmdk-item').forEach(el => {
+        el.classList.toggle('active', parseInt(el.dataset.idx, 10) === cmdkActive);
+    });
+}
+
+function runCommandItem(idx) {
+    const item = cmdkItems[idx];
+    if (!item) return;
+    closeCommandPalette();
+    item.run();
+}
+
+function onCmdkKeydown(e) {
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (cmdkItems.length) { cmdkActive = (cmdkActive + 1) % cmdkItems.length; highlightCmdkActive(); }
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (cmdkItems.length) { cmdkActive = (cmdkActive - 1 + cmdkItems.length) % cmdkItems.length; highlightCmdkActive(); }
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        runCommandItem(cmdkActive);
+    } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeCommandPalette();
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        const open = document.getElementById('cmdk-overlay');
+        if (open) closeCommandPalette(); else openCommandPalette();
+    }
+});
 
 function showSettings(initialSection) {
     const overlay = document.createElement('div');
