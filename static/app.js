@@ -3067,13 +3067,27 @@ function renderReactions(msg) {
     for (const [emoji, users] of Object.entries(msg.reactions)) {
         if (!users || users.length === 0) continue;
         const isMine = users.includes(state.username);
-        html += `<span class="reaction${isMine ? ' mine' : ''}" onclick="toggleReactionClick('${msg.id}','${emoji}')" title="${users.join(', ')}">${emoji}<span class="r-count">${users.length > 1 ? users.length : ''}</span></span>`;
+        html += `<span class="reaction${isMine ? ' mine' : ''}" onclick="toggleReactionClick('${msg.id}','${emoji}',event)" title="${users.join(', ')}">${emoji}<span class="r-count">${users.length > 1 ? users.length : ''}</span></span>`;
     }
     html += '</div>';
     return html;
 }
 
-function addReaction(emoji) {
+// One-shot emoji that flies up from (x,y) and fades — feedback for adding
+// (not removing) a reaction. Self-removing via animationend so a burst spam
+// can't leak nodes.
+function spawnReactionBurst(emoji, x, y) {
+    if (typeof x !== 'number' || typeof y !== 'number') return;
+    const el = document.createElement('span');
+    el.className = 'reaction-burst';
+    el.textContent = emoji;
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    el.addEventListener('animationend', () => el.remove());
+    document.body.appendChild(el);
+}
+
+function addReaction(emoji, ev) {
     if (!ctxTargetMsg || !state.currentChat) { hideContextMenu(); return; }
 
     const chat = state.chats[state.currentChat.id];
@@ -3091,6 +3105,7 @@ function addReaction(emoji) {
         if (msg.reactions[emoji].length === 0) delete msg.reactions[emoji];
     } else {
         msg.reactions[emoji].push(state.username);
+        if (ev) spawnReactionBurst(emoji, ev.clientX, ev.clientY);
     }
 
     saveState();
@@ -3115,7 +3130,7 @@ function toggleEmojiPanel() {
     for (const em of EMOJI_FULL) {
         const btn = document.createElement('button');
         btn.textContent = em;
-        btn.onclick = () => addReaction(em);
+        btn.onclick = (e) => addReaction(em, e);
         panel.appendChild(btn);
     }
     panel.classList.add('show');
@@ -3179,7 +3194,7 @@ document.addEventListener('click', (e) => {
     picker.style.display = 'none';
 });
 
-function toggleReactionClick(msgId, emoji) {
+function toggleReactionClick(msgId, emoji, ev) {
     if (!state.currentChat) return;
     const chat = state.chats[state.currentChat.id];
     if (!chat) return;
@@ -3196,6 +3211,7 @@ function toggleReactionClick(msgId, emoji) {
         if (msg.reactions[emoji].length === 0) delete msg.reactions[emoji];
     } else {
         msg.reactions[emoji].push(state.username);
+        if (ev) spawnReactionBurst(emoji, ev.clientX, ev.clientY);
     }
 
     saveState();

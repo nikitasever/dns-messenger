@@ -1933,8 +1933,25 @@ button:active, .btn:active { transform: scale(0.94); }
 .message:hover { transform: translateY(-1px); }
 
 /* Reactions pop */
-.reaction { animation: bounceIn 0.35s ease both; transition: transform 0.15s ease; }
+.reaction { animation: bounceIn 0.35s var(--ease-spring) both; transition: transform 0.15s var(--ease-spring); }
 .reaction:hover { transform: scale(1.18); }
+
+/* Reaction-add burst: a bigger copy of the emoji flies up and fades out from
+   the click point. One-shot, self-removing (see spawnReactionBurst in
+   app.js) — no toggle needed, .no-anim/reduced-motion freeze it like any
+   other animation since duration goes through the same media query. */
+.reaction-burst {
+    position: fixed;
+    z-index: 9999;
+    pointer-events: none;
+    font-size: 22px;
+    animation: reactionBurst 0.6s var(--ease-out) forwards;
+}
+@keyframes reactionBurst {
+    0%   { transform: translate(-50%, -50%) scale(0.6); opacity: 1; }
+    30%  { transform: translate(-50%, -160%) scale(1.5); opacity: 1; }
+    100% { transform: translate(-50%, -280%) scale(1.1); opacity: 0; }
+}
 
 /* Modals — already have modalIn, add backdrop fade */
 .modal-backdrop, .modal-overlay { animation: fadeIn 0.2s ease; }
