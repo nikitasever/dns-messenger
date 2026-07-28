@@ -317,21 +317,21 @@ function applyStaticTranslations() {
 }
 
 // ── Color palette for avatars ───────────────────────────────────────
-const AVATAR_COLORS = [
-    ['#8774e1', '#6c5bbf'], ['#4dcd5e', '#37a34a'], ['#e05d5d', '#b94545'],
-    ['#e8a63a', '#c48a2e'], ['#3ea6e1', '#2d85b8'], ['#e06bb0', '#b8508f'],
-    ['#6ec4db', '#4fa3b8'], ['#b37de0', '#8f5fbf'], ['#e08d6e', '#b8704f'],
-    ['#4dc4c4', '#37a3a3'],
-];
-
 function hashStr(s) {
     let h = 0;
     for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
     return Math.abs(h);
 }
 
+// Hue picked straight from the hash instead of indexing into a fixed
+// palette - a 10-entry table gave two users a 1-in-10 chance of sharing an
+// identical gradient; a continuous hue wheel makes that a 1-in-360 chance
+// instead, at the same saturation/lightness the old palette used (so
+// contrast against .sender text and the avatar's own initial stays as
+// tuned before).
 function avatarColor(name) {
-    return AVATAR_COLORS[hashStr(name) % AVATAR_COLORS.length];
+    const hue = hashStr(name) % 360;
+    return [`hsl(${hue}, 62%, 58%)`, `hsl(${hue}, 62%, 42%)`];
 }
 
 // Profile photo cache
