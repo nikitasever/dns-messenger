@@ -19,6 +19,7 @@ const I18N = {
         empty_desc: 'Зашифрованные сообщения через DNS-запросы. Работает даже при отключениях интернета.',
         message_placeholder: 'Сообщение', voice_msg_btn: 'Голосовое сообщение',
         typing_one: 'печатает...', typing_many: 'печатают...',
+        new_messages: 'Новые сообщения',
         you_prefix: 'Вы: ',
         label_voice: 'Голосовое', label_video: 'Видео',
         push_unsupported: 'Push-уведомления не поддерживаются этим браузером',
@@ -119,6 +120,7 @@ const I18N = {
         empty_desc: 'Encrypted messages via DNS queries. Works even during internet shutdowns.',
         message_placeholder: 'Message', voice_msg_btn: 'Voice message',
         typing_one: 'typing...', typing_many: 'are typing...',
+        new_messages: 'New messages',
         you_prefix: 'You: ',
         label_voice: 'Voice', label_video: 'Video',
         push_unsupported: 'Push notifications are not supported by this browser',
@@ -413,6 +415,7 @@ const paneA = {
     editingMsg: null,
     searchMatches: [], searchIdx: -1,
     typingSentAt: 0, typingStopTimer: null,
+    unreadDividerId: null,
 };
 let paneB = null;
 function ensurePaneB() {
@@ -436,6 +439,7 @@ function ensurePaneB() {
         editingMsg: null,
         searchMatches: [], searchIdx: -1,
         typingSentAt: 0, typingStopTimer: null,
+        unreadDividerId: null,
     };
     paneB.$sendBtn.addEventListener('click', () => sendMessageInPane(paneB));
     paneB.$msgInput.addEventListener('keydown', (e) => {
@@ -652,10 +656,25 @@ function addMessage(chatId, msg) {
     saveState();
 }
 
+// The last chat.unread messages are the ones that arrived while the chat
+// wasn't open (unread is only ever incremented for incoming messages, see
+// the socket 'message'/'file' handlers) - so the boundary sits at
+// messages.length - unread. Approximate, like the rest of this unread
+// tracking, but matches what a local-only chat can know.
+function computeUnreadDividerId(chat) {
+    if (!chat.unread || chat.unread <= 0) return null;
+    const idx = chat.messages.length - chat.unread;
+    if (idx < 0 || idx >= chat.messages.length) return null;
+    return chat.messages[idx]?.id ?? null;
+}
+
 function selectChat(id) {
     const chat = state.chats[id];
     if (!chat) return;
     state.currentChat = { type: chat.type, id };
+    const dividerId = computeUnreadDividerId(chat);
+    paneA.unreadDividerId = dividerId;
+    if (dividerId) paneA.pendingScrollTarget = { id: dividerId, align: 'top' };
     chat.unread = 0;
     // Notify peer that their messages have been read (DM only)
     if (chat.type === 'dm') {
@@ -678,6 +697,7 @@ function selectChat(id) {
 
 function goBack() {
     state.currentChat = null;
+    paneA.unreadDividerId = null;
     document.body.classList.remove('chat-open');
     $chatHeader.style.display = 'none';
     $messages.style.display = 'none';
@@ -693,6 +713,9 @@ function selectChatInPane(pane, id) {
     const chat = state.chats[id];
     if (!chat) return;
     pane.currentChat = { type: chat.type, id };
+    const dividerId = computeUnreadDividerId(chat);
+    pane.unreadDividerId = dividerId;
+    if (dividerId) pane.pendingScrollTarget = { id: dividerId, align: 'top' };
     chat.unread = 0;
     if (chat.type === 'dm') {
         try { socket.emit('read', { to: id }); } catch(e) {}
@@ -730,7 +753,7 @@ function renderHeaderB() {
 }
 
 function closePaneB() {
-    if (paneB) paneB.currentChat = null;
+    if (paneB) { paneB.currentChat = null; paneB.unreadDividerId = null; }
     toggleSplitView();
 }
 
@@ -1087,16 +1110,24 @@ const ROW_OVERSCAN = 8;
 // Metadata-only pass: exactly the grouping/date-separator logic the old
 // single-pass loop used, just producing descriptors instead of DOM so it
 // stays cheap to run on every render regardless of history length.
-function buildMessageRows(chat) {
+function buildMessageRows(chat, pane) {
     const isGroup = chat.type === 'group';
     const rows = [];
     let lastSender = null;
     let lastDate = null;
+    const dividerId = pane?.unreadDividerId;
     for (const msg of chat.messages) {
         const msgDate = new Date(msg.ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
         if (msgDate !== lastDate) {
             lastDate = msgDate;
             rows.push({ type: 'date', key: 'date:' + rows.length, label: msgDate });
+        }
+        // Marks where "new" started at the moment this chat was opened -
+        // stays fixed at that point across re-renders (new arrivals while
+        // open don't move it) until the chat is reselected, same as
+        // Telegram's unread divider.
+        if (dividerId && msg.id === dividerId) {
+            rows.push({ type: 'unread', key: 'unread:' + dividerId });
         }
         if (msg.system) {
             rows.push({ type: 'sys', key: 'sys:' + (msg.id || rows.length), msg });
@@ -1143,6 +1174,12 @@ function buildRowNode(row, pane) {
         sys.className = 'system-msg';
         sys.innerHTML = `<span>${esc(row.msg.text)}</span>`;
         return sys;
+    }
+    if (row.type === 'unread') {
+        const div = document.createElement('div');
+        div.className = 'unread-divider';
+        div.innerHTML = `<span>${t('new_messages') || 'Новые сообщения'}</span>`;
+        return div;
     }
     return buildMessageNode(row.msg, row.isNew, row.isGroup, pane);
 }
@@ -1500,7 +1537,7 @@ function renderMessagesForPane(pane) {
     const wasNearBottom = pane.forceBottom || isNearBottomIn(pane);
     pane.forceBottom = false;
 
-    pane.msgRows = buildMessageRows(chat);
+    pane.msgRows = buildMessageRows(chat, pane);
     pane.msgRowTop = computeRowTops(pane.msgRows);
 
     if (!pane.msgRows.length) {
@@ -1519,7 +1556,12 @@ function renderMessagesForPane(pane) {
         pendingIdx = pane.msgRows.findIndex(r => r.type === 'msg' && r.msg.id === pending.id);
         if (pendingIdx >= 0) {
             const viewport = pane.$messages.clientHeight || 400;
-            scrollTop = Math.max(0, pane.msgRowTop[pendingIdx] - viewport / 2);
+            // 'top' align (the unread divider) puts the row right at the
+            // top of the viewport instead of centering it - the divider
+            // row sits immediately before the target message row.
+            scrollTop = pending.align === 'top' && pendingIdx > 0
+                ? Math.max(0, pane.msgRowTop[pendingIdx - 1] - 8)
+                : Math.max(0, pane.msgRowTop[pendingIdx] - viewport / 2);
         }
     }
     if (scrollTop === undefined) {
