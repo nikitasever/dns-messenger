@@ -409,6 +409,7 @@ const paneA = {
     pendingScrollTarget: null,
     scrollRenderQueued: false,
     forceBottom: false,
+    replyingTo: null,
 };
 let paneB = null;
 function ensurePaneB() {
@@ -428,6 +429,7 @@ function ensurePaneB() {
         pendingScrollTarget: null,
         scrollRenderQueued: false,
         forceBottom: false,
+        replyingTo: null,
     };
     paneB.$sendBtn.addEventListener('click', () => sendMessageInPane(paneB));
     paneB.$msgInput.addEventListener('keydown', (e) => {
@@ -719,9 +721,14 @@ function closePaneB() {
 async function sendMessageInPane(pane) {
     if (pane === paneA) return sendMessage();
     if (!pane.currentChat || !pane.$msgInput.value.trim()) return;
-    const text = pane.$msgInput.value.trim();
+    let text = pane.$msgInput.value.trim();
     pane.$msgInput.value = '';
     pane.$msgInput.style.height = 'auto';
+
+    if (pane.replyingTo) {
+        text = `> ${pane.replyingTo.from}: ${pane.replyingTo.text.slice(0, 60)}\n${text}`;
+        hideComposerBar(pane);
+    }
 
     const chat = state.chats[pane.currentChat.id];
     const ts = Date.now();
@@ -1275,86 +1282,88 @@ function buildMessageNode(msg, isNew, isGroup, pane) {
                     scrollToQuoted(replyQName, replyQText);
                 });
             }
-
-            // Swipe-to-reply (Telegram-like) + long-press context menu
-            let longPressTimer;
-            let swipeStartX = 0, swipeStartY = 0, swipeDX = 0, swiping = false, swipeFired = false;
-            const SWIPE_THRESHOLD = 60;
-            const swipeDir = isMine ? -1 : 1; // own messages swipe left, others right
-            div.addEventListener('touchstart', (e) => {
-                const t0 = e.touches[0];
-                swipeStartX = t0.clientX;
-                swipeStartY = t0.clientY;
-                swipeDX = 0; swiping = true; swipeFired = false;
-                div.classList.add('holding');
-                longPressTimer = setTimeout(() => {
-                    navigator.vibrate?.(15);
-                    showContextMenu(t0, msg);
-                    swiping = false;
-                }, 500);
-            }, { passive: true });
-            div.addEventListener('touchmove', (e) => {
-                if (!swiping) return;
-                const t0 = e.touches[0];
-                const dx = t0.clientX - swipeStartX;
-                const dy = t0.clientY - swipeStartY;
-                if (Math.abs(dy) > 14) { swiping = false; clearTimeout(longPressTimer); div.style.transform = ''; return; }
-                if (Math.abs(dx) > 6) clearTimeout(longPressTimer);
-                // Only allow swipe in the right direction
-                if (Math.sign(dx) !== swipeDir && dx !== 0) return;
-                swipeDX = dx;
-                const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
-                div.style.transform = `translateX(${damped}px)`;
-                if (!swipeFired && Math.abs(dx) > SWIPE_THRESHOLD) {
-                    swipeFired = true;
-                    navigator.vibrate?.(20);
-                    div.classList.add('swipe-flash');
-                }
-            }, { passive: true });
-            div.addEventListener('touchend', () => {
-                clearTimeout(longPressTimer);
-                div.classList.remove('holding');
-                div.style.transition = 'transform 0.25s ease';
-                div.style.transform = '';
-                setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
-                if (swipeFired) startReply(msg);
-                swiping = false;
-            });
-
-            // Mouse drag swipe (desktop)
-            let mDown = false, mStartX = 0, mFired = false;
-            let mHoldTimer;
-            div.addEventListener('mousedown', (e) => {
-                if (e.button !== 0) return;
-                mDown = true; mStartX = e.clientX; mFired = false;
-                div.classList.add('holding');
-                mHoldTimer = setTimeout(() => { showContextMenu(e, msg); }, 500);
-            });
-            div.addEventListener('mousemove', (e) => {
-                if (!mDown) return;
-                const dx = e.clientX - mStartX;
-                if (Math.abs(dx) > 6) clearTimeout(mHoldTimer);
-                if (Math.sign(dx) !== swipeDir && dx !== 0) return;
-                const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
-                div.style.transform = `translateX(${damped}px)`;
-                if (!mFired && Math.abs(dx) > SWIPE_THRESHOLD) {
-                    mFired = true;
-                    div.classList.add('swipe-flash');
-                }
-            });
-            const mUp = () => {
-                if (!mDown) return;
-                mDown = false;
-                clearTimeout(mHoldTimer);
-                div.classList.remove('holding');
-                div.style.transition = 'transform 0.25s ease';
-                div.style.transform = '';
-                setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
-                if (mFired) startReply(msg);
-            };
-            div.addEventListener('mouseup', mUp);
-            div.addEventListener('mouseleave', mUp);
         }
+
+        // Swipe-to-reply (Telegram-like) + long-press context menu - works in
+        // both panes; startReply/showContextMenu take pane so the reply lands
+        // in whichever pane's composer the swipe happened in.
+        let longPressTimer;
+        let swipeStartX = 0, swipeStartY = 0, swipeDX = 0, swiping = false, swipeFired = false;
+        const SWIPE_THRESHOLD = 60;
+        const swipeDir = isMine ? -1 : 1; // own messages swipe left, others right
+        div.addEventListener('touchstart', (e) => {
+            const t0 = e.touches[0];
+            swipeStartX = t0.clientX;
+            swipeStartY = t0.clientY;
+            swipeDX = 0; swiping = true; swipeFired = false;
+            div.classList.add('holding');
+            longPressTimer = setTimeout(() => {
+                navigator.vibrate?.(15);
+                showContextMenu(t0, msg, pane);
+                swiping = false;
+            }, 500);
+        }, { passive: true });
+        div.addEventListener('touchmove', (e) => {
+            if (!swiping) return;
+            const t0 = e.touches[0];
+            const dx = t0.clientX - swipeStartX;
+            const dy = t0.clientY - swipeStartY;
+            if (Math.abs(dy) > 14) { swiping = false; clearTimeout(longPressTimer); div.style.transform = ''; return; }
+            if (Math.abs(dx) > 6) clearTimeout(longPressTimer);
+            // Only allow swipe in the right direction
+            if (Math.sign(dx) !== swipeDir && dx !== 0) return;
+            swipeDX = dx;
+            const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
+            div.style.transform = `translateX(${damped}px)`;
+            if (!swipeFired && Math.abs(dx) > SWIPE_THRESHOLD) {
+                swipeFired = true;
+                navigator.vibrate?.(20);
+                div.classList.add('swipe-flash');
+            }
+        }, { passive: true });
+        div.addEventListener('touchend', () => {
+            clearTimeout(longPressTimer);
+            div.classList.remove('holding');
+            div.style.transition = 'transform 0.25s ease';
+            div.style.transform = '';
+            setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
+            if (swipeFired) startReply(msg, pane);
+            swiping = false;
+        });
+
+        // Mouse drag swipe (desktop)
+        let mDown = false, mStartX = 0, mFired = false;
+        let mHoldTimer;
+        div.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            mDown = true; mStartX = e.clientX; mFired = false;
+            div.classList.add('holding');
+            mHoldTimer = setTimeout(() => { showContextMenu(e, msg, pane); }, 500);
+        });
+        div.addEventListener('mousemove', (e) => {
+            if (!mDown) return;
+            const dx = e.clientX - mStartX;
+            if (Math.abs(dx) > 6) clearTimeout(mHoldTimer);
+            if (Math.sign(dx) !== swipeDir && dx !== 0) return;
+            const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
+            div.style.transform = `translateX(${damped}px)`;
+            if (!mFired && Math.abs(dx) > SWIPE_THRESHOLD) {
+                mFired = true;
+                div.classList.add('swipe-flash');
+            }
+        });
+        const mUp = () => {
+            if (!mDown) return;
+            mDown = false;
+            clearTimeout(mHoldTimer);
+            div.classList.remove('holding');
+            div.style.transition = 'transform 0.25s ease';
+            div.style.transform = '';
+            setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
+            if (mFired) startReply(msg, pane);
+        };
+        div.addEventListener('mouseup', mUp);
+        div.addEventListener('mouseleave', mUp);
 
     return div;
 }
@@ -1525,9 +1534,9 @@ async function sendMessage() {
     }
 
     // ── Reply mode: prepend quote line ──
-    if (replyingTo) {
-        text = `> ${replyingTo.from}: ${replyingTo.text.slice(0, 60)}\n${text}`;
-        hideComposerBar();
+    if (paneA.replyingTo) {
+        text = `> ${paneA.replyingTo.from}: ${paneA.replyingTo.text.slice(0, 60)}\n${text}`;
+        hideComposerBar(paneA);
     }
 
     const ts = Date.now();
@@ -3575,11 +3584,12 @@ function showContextMenu(e, msg, pane = paneA) {
         if (el) el.classList.add('selected');
     }
 
-    // Reply/Edit need the composer bar, which only exists in pane A so far.
+    // Reply now has its own composer bar in both panes. Edit stays pane-A-only
+    // (no dedicated edit flow built for pane B yet).
     const replyBtn = document.getElementById('ctx-reply-btn');
-    if (replyBtn) replyBtn.style.display = pane === paneA ? '' : 'none';
+    if (replyBtn) replyBtn.style.display = '';
 
-    // Show Edit only for own text messages
+    // Show Edit only for own text messages, and only in pane A
     const editBtn = document.getElementById('ctx-edit-btn');
     if (editBtn) {
         const canEdit = pane === paneA && msg && msg.from === state.username && !msg.voice && !msg.file && !msg.videoMsg && !msg.deleted;
@@ -3616,8 +3626,9 @@ function hideContextMenu() {
 }
 
 // ── Reply / Edit composer ───────────────────────────────────────────
-let replyingTo = null;   // { id, from, text }
-let editingMsg = null;   // message object being edited
+// replyingTo lives on each pane (pane.replyingTo) so pane A and pane B can
+// each have their own reply-in-progress. Edit stays paneA-only (below).
+let editingMsg = null;   // message object being edited - always pane A
 
 function bodyOf(msg) {
     let b = msg.text || (msg.voice ? '🎤 ' + t('label_voice') : '') || (msg.videoMsg ? '🎥 ' + t('label_video') : '') || (msg.file ? '📎 ' + msg.file : '');
@@ -3625,23 +3636,28 @@ function bodyOf(msg) {
     return b;
 }
 
-function ensureComposerBar() {
-    let bar = document.getElementById('composer-bar');
+function ensureComposerBar(pane) {
+    const barId = pane === paneA ? 'composer-bar' : 'composer-bar-b';
+    let bar = document.getElementById(barId);
     if (bar) return bar;
     bar = document.createElement('div');
-    bar.id = 'composer-bar';
+    bar.id = barId;
     bar.className = 'composer-bar';
-    const area = document.getElementById('input-area');
-    area?.parentNode.insertBefore(bar, area);
+    pane.$inputArea?.parentNode.insertBefore(bar, pane.$inputArea);
     return bar;
 }
-function hideComposerBar() {
-    replyingTo = null;
-    editingMsg = null;
-    document.getElementById('composer-bar')?.remove();
+function hideComposerBar(pane = paneA) {
+    pane.replyingTo = null;
+    if (pane === paneA) editingMsg = null;
+    document.getElementById(pane === paneA ? 'composer-bar' : 'composer-bar-b')?.remove();
 }
-function showComposerBar(mode, msg) {
-    const bar = ensureComposerBar();
+// Bridges the composer's inline onclick="" (a plain string, can't carry a
+// pane object reference) back to the right pane via its suffix.
+function hideComposerBarPane(suffix) {
+    hideComposerBar(suffix === 'b' ? paneB : paneA);
+}
+function showComposerBar(mode, msg, pane = paneA) {
+    const bar = ensureComposerBar(pane);
     const icon = mode === 'edit' ? '✏️' : '↩';
     const title = mode === 'edit' ? (t('editing') || 'Редактирование') : msg.from;
     bar.innerHTML = `
@@ -3651,26 +3667,26 @@ function showComposerBar(mode, msg) {
             <div class="composer-title">${esc(title)}</div>
             <div class="composer-text">${esc(bodyOf(msg).slice(0, 80))}</div>
         </div>
-        <button class="composer-close" onclick="hideComposerBar()">✕</button>
+        <button class="composer-close" onclick="hideComposerBarPane('${pane.suffix}')">✕</button>
     `;
 }
 
 // Swipe-to-reply / context reply: open reply composer
-function startReply(msg) {
+function startReply(msg, pane = paneA) {
     if (!msg) return;
-    editingMsg = null;
-    replyingTo = { id: msg.id, from: msg.from, text: bodyOf(msg) };
-    showComposerBar('reply', msg);
-    $msgInput?.focus();
-    const el = document.querySelector(`.message[data-msg-id="${msg.id || ''}"]`);
+    if (pane === paneA) editingMsg = null;
+    pane.replyingTo = { id: msg.id, from: msg.from, text: bodyOf(msg) };
+    showComposerBar('reply', msg, pane);
+    pane.$msgInput?.focus();
+    const el = pane.$messages.querySelector(`.message[data-msg-id="${msg.id || ''}"]`);
     if (el) { el.classList.add('reply-flash'); setTimeout(() => el.classList.remove('reply-flash'), 700); }
 }
 
 function startEdit(msg) {
     if (!msg || msg.from !== state.username) return;
-    replyingTo = null;
+    paneA.replyingTo = null;
     editingMsg = msg;
-    showComposerBar('edit', msg);
+    showComposerBar('edit', msg, paneA);
     if ($msgInput) {
         $msgInput.value = bodyOf(msg);
         $msgInput.focus();
@@ -3874,7 +3890,7 @@ function toggleReactionClick(msgId, emoji, ev, paneSuffix) {
 
 function ctxReply() {
     if (!ctxTargetMsg) { hideContextMenu(); return; }
-    startReply(ctxTargetMsg);
+    startReply(ctxTargetMsg, ctxTargetPane || paneA);
     hideContextMenu();
 }
 
