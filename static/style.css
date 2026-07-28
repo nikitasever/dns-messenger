@@ -2093,7 +2093,7 @@ button:active, .btn:active { transform: scale(0.94); }
 }
 
 /* Modals — already have modalIn, add backdrop fade */
-.modal-backdrop, .modal-overlay { animation: fadeIn 0.2s ease; }
+.modal-overlay { animation: fadeIn 0.2s ease; }
 .modal { animation: bounceIn 0.35s var(--ease-spring) both; }
 
 /* Toasts slide */
