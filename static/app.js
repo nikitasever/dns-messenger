@@ -576,12 +576,15 @@ function selectChat(id) {
     }
     saveState();
     renderChatList();
-    renderMessages();
     renderHeader();
     $noChat.style.display = 'none';
     $chatHeader.style.display = '';
+    // Must be visible before renderMessages() runs: it reads
+    // $messages.clientHeight to size the virtualized window and sets
+    // scrollTop to jump to the bottom, both no-ops on a display:none element.
     $messages.style.display = '';
     $inputArea.style.display = '';
+    renderMessages();
     document.body.classList.add('chat-open');
     $msgInput.focus();
 }
@@ -782,58 +785,112 @@ function renderHeader() {
 }
 
 // ── Render: Messages ────────────────────────────────────────────────
-function renderMessages() {
-    if (!state.currentChat) return;
-    const chat = state.chats[state.currentChat.id];
-    if (!chat) return;
-    const isGroup = chat.type === 'group';
-    const wasNearBottom = renderMessages._forceBottom || isNearBottom();
-    renderMessages._forceBottom = false;
-    $messages.innerHTML = '';
+// Virtualized: chat.messages has no cap (kept forever locally), so a long
+// history could mean thousands of rows. Rebuilding all of them as DOM on
+// every renderMessages() call (new message, reaction toggle, edit...) would
+// cost O(history) every time. Instead we build lightweight per-row metadata
+// (no DOM, cheap even for thousands of rows) once per call, then only
+// materialize DOM for rows inside the current scroll viewport + overscan,
+// using two spacer elements to stand in for the rest so scrollHeight/
+// scrollTop still behave like the full list is there.
+const rowHeightCache = new Map();
+const DEFAULT_ROW_HEIGHT = 56;
+const ROW_OVERSCAN = 8;
+let msgRows = [];
+let msgRowTop = [];
+let msgWindowStart = 0;
+let msgWindowEnd = -1;
+// Set by scrollToQuoted/scrollToPinned/focusSearchMatch to force the
+// window onto a specific message (which may be far outside the current
+// viewport) before scrolling to it - see renderMessages().
+let pendingScrollTarget = null;
 
+// Metadata-only pass: exactly the grouping/date-separator logic the old
+// single-pass loop used, just producing descriptors instead of DOM so it
+// stays cheap to run on every render regardless of history length.
+function buildMessageRows(chat) {
+    const isGroup = chat.type === 'group';
+    const rows = [];
     let lastSender = null;
     let lastDate = null;
-
     for (const msg of chat.messages) {
         const msgDate = new Date(msg.ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
         if (msgDate !== lastDate) {
             lastDate = msgDate;
-            const sep = document.createElement('div');
-            sep.className = 'date-separator';
-            sep.innerHTML = `<span>${msgDate}</span>`;
-            $messages.appendChild(sep);
+            rows.push({ type: 'date', key: 'date:' + rows.length, label: msgDate });
         }
-
         if (msg.system) {
-            const sys = document.createElement('div');
-            sys.className = 'system-msg';
-            sys.innerHTML = `<span>${esc(msg.text)}</span>`;
-            $messages.appendChild(sys);
+            rows.push({ type: 'sys', key: 'sys:' + (msg.id || rows.length), msg });
             lastSender = null;
             continue;
         }
-
-        const isMine = msg.from === state.username;
         const isNew = msg.from !== lastSender;
         lastSender = msg.from;
+        rows.push({ type: 'msg', key: msg.id || ('idx:' + rows.length), msg, isNew, isGroup });
+    }
+    return rows;
+}
 
-        const div = document.createElement('div');
+function computeRowTops(rows) {
+    const tops = new Array(rows.length + 1);
+    let acc = 0;
+    for (let i = 0; i < rows.length; i++) {
+        tops[i] = acc;
+        acc += rowHeightCache.get(rows[i].key) || DEFAULT_ROW_HEIGHT;
+    }
+    tops[rows.length] = acc;
+    return tops;
+}
 
-        // Skip deleted messages or show placeholder
-        if (msg.deleted) {
-            div.className = `message ${isMine ? 'sent' : 'received'} deleted${isNew ? ' first' : ''}`;
-            div.innerHTML = `<div class="msg-text">Сообщение удалено<span class="msg-footer">
-                <span class="msg-time">${formatTime(msg.ts)}</span>
-            </span></div>`;
-            $messages.appendChild(div);
-            continue;
-        }
+// Row counts here top out at a few thousand even for a very long chat, so a
+// linear scan (run at most once per animation frame - see the scroll
+// listener) stays well under a frame budget; not worth a binary search.
+function findRowAtOffset(rowTop, offset) {
+    for (let i = 0; i < rowTop.length - 1; i++) {
+        if (rowTop[i + 1] > offset) return i;
+    }
+    return Math.max(0, rowTop.length - 2);
+}
 
-        // Data attributes for context menu
-        div.dataset.msgId = msg.id || '';
-        div.dataset.chatId = state.currentChat.id;
+function buildRowNode(row) {
+    if (row.type === 'date') {
+        const sep = document.createElement('div');
+        sep.className = 'date-separator';
+        sep.innerHTML = `<span>${row.label}</span>`;
+        return sep;
+    }
+    if (row.type === 'sys') {
+        const sys = document.createElement('div');
+        sys.className = 'system-msg';
+        sys.innerHTML = `<span>${esc(row.msg.text)}</span>`;
+        return sys;
+    }
+    return buildMessageNode(row.msg, row.isNew, row.isGroup);
+}
 
-        const reactionsHtml = renderReactions(msg);
+// Builds one .message DOM node - unchanged from the previous single-pass
+// renderMessages() loop body (every message-type branch and its
+// swipe/context-menu/reaction wiring), just extracted so it can be called
+// per-row from the windowed renderer instead of once per message in the
+// full history.
+function buildMessageNode(msg, isNew, isGroup) {
+    const isMine = msg.from === state.username;
+    const div = document.createElement('div');
+
+    // Skip deleted messages or show placeholder
+    if (msg.deleted) {
+        div.className = `message ${isMine ? 'sent' : 'received'} deleted${isNew ? ' first' : ''}`;
+        div.innerHTML = `<div class="msg-text">Сообщение удалено<span class="msg-footer">
+            <span class="msg-time">${formatTime(msg.ts)}</span>
+        </span></div>`;
+        return div;
+    }
+
+    // Data attributes for context menu
+    div.dataset.msgId = msg.id || '';
+    div.dataset.chatId = state.currentChat.id;
+
+    const reactionsHtml = renderReactions(msg);
 
         // Detect a leading reply quote of the form "> name: text\n..." and split it out.
         // qName/qText come straight from the message's own (fully attacker-controlled)
@@ -950,6 +1007,17 @@ function renderMessages() {
 
         if (authWarn) { div.classList.add('msg-unverified'); div.insertAdjacentHTML('afterbegin', authWarn); }
 
+        // Search/pinned highlight - data-driven off chatSearchMatches/pinnedId
+        // rather than a post-render DOM query, so it stays correct however the
+        // virtualized window happens to be sliced (a match scrolled out of the
+        // DOM still gets highlighted the moment it scrolls back into the window).
+        if (msg.id && chatSearchMatches.includes(msg.id)) {
+            div.classList.add('search-hit');
+            if (msg.id === chatSearchMatches[chatSearchIdx]) div.classList.add('search-current');
+        }
+        const curChat = state.currentChat && state.chats[state.currentChat.id];
+        if (curChat && curChat.pinnedId === msg.id) div.classList.add('is-pinned');
+
         // Reply-quote click: attached here (not inline onclick) so replyQName/
         // replyQText travel as real JS values, never serialized into an attribute
         // that gets parsed as code.
@@ -1040,24 +1108,132 @@ function renderMessages() {
             setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
             if (mFired) startReply(msg);
         };
-        div.addEventListener('mouseup', mUp);
-        div.addEventListener('mouseleave', mUp);
+    div.addEventListener('mouseup', mUp);
+    div.addEventListener('mouseleave', mUp);
 
-        $messages.appendChild(div);
+    return div;
+}
+
+// Rebuilds the visible slice [start, end] into $messages behind two spacer
+// divs, then measures what actually got rendered to refine rowHeightCache.
+// force=true always rebuilds (used after data changes, e.g. a new message
+// or a toggled reaction, even if the index range happens to match).
+function renderWindowAt(scrollTop, force) {
+    if (!msgRows.length) {
+        $messages.innerHTML = '';
+        msgWindowStart = 0; msgWindowEnd = -1;
+        return;
     }
+    const viewport = $messages.clientHeight || 400;
+    let start = findRowAtOffset(msgRowTop, scrollTop);
+    let end = start;
+    while (end < msgRows.length - 1 && msgRowTop[end + 1] < scrollTop + viewport) end++;
+    start = Math.max(0, start - ROW_OVERSCAN);
+    end = Math.min(msgRows.length - 1, end + ROW_OVERSCAN);
 
-    // Mark pinned message
-    const pinnedChat = state.chats[state.currentChat.id];
-    if (pinnedChat && pinnedChat.pinnedId) {
-        const pel = $messages.querySelector(`.message[data-msg-id="${pinnedChat.pinnedId}"]`);
-        if (pel) pel.classList.add('is-pinned');
+    if (!force && start === msgWindowStart && end === msgWindowEnd) {
+        $messages.scrollTop = scrollTop;
+        return;
     }
-    renderPinnedBar();
+    msgWindowStart = start;
+    msgWindowEnd = end;
 
+    $messages.innerHTML = '';
+    const topSpacer = document.createElement('div');
+    topSpacer.className = 'msg-spacer';
+    topSpacer.style.height = msgRowTop[start] + 'px';
+    $messages.appendChild(topSpacer);
+
+    for (let i = start; i <= end; i++) $messages.appendChild(buildRowNode(msgRows[i]));
+
+    const bottomSpacer = document.createElement('div');
+    bottomSpacer.className = 'msg-spacer';
+    bottomSpacer.style.height = Math.max(0, msgRowTop[msgRows.length] - msgRowTop[end + 1]) + 'px';
+    $messages.appendChild(bottomSpacer);
+
+    $messages.scrollTop = scrollTop;
+    remeasureVisibleRows();
+}
+
+// Measures the actual on-screen gap between consecutive rendered rows
+// (rather than el.offsetHeight alone) so the cached height already
+// includes whatever the CSS layout adds between rows (currently .messages'
+// flex `gap`) without this code needing to know that detail exists.
+function remeasureVisibleRows() {
+    const nodes = $messages.children; // [topSpacer, ...rows, bottomSpacer]
+    if (nodes.length < 3) return;
+    let changed = false;
+    for (let i = 1; i < nodes.length - 1; i++) {
+        const row = msgRows[msgWindowStart + (i - 1)];
+        if (!row) continue;
+        const slot = nodes[i + 1].getBoundingClientRect().top - nodes[i].getBoundingClientRect().top;
+        if (slot > 0 && Math.abs((rowHeightCache.get(row.key) || 0) - slot) > 0.5) {
+            rowHeightCache.set(row.key, slot);
+            changed = true;
+        }
+    }
+    if (!changed) return;
+    msgRowTop = computeRowTops(msgRows);
+    nodes[0].style.height = msgRowTop[msgWindowStart] + 'px';
+    nodes[nodes.length - 1].style.height = Math.max(0, msgRowTop[msgRows.length] - msgRowTop[msgWindowEnd + 1]) + 'px';
+}
+
+let msgScrollRenderQueued = false;
+$messages.addEventListener('scroll', () => {
+    if (msgScrollRenderQueued) return;
+    msgScrollRenderQueued = true;
     requestAnimationFrame(() => {
-        if (wasNearBottom) $messages.scrollTop = $messages.scrollHeight;
+        msgScrollRenderQueued = false;
+        renderWindowAt($messages.scrollTop, false);
         updateScrollBtn();
     });
+});
+
+function renderMessages() {
+    if (!state.currentChat) return;
+    const chat = state.chats[state.currentChat.id];
+    if (!chat) return;
+    const wasNearBottom = renderMessages._forceBottom || isNearBottom();
+    renderMessages._forceBottom = false;
+
+    msgRows = buildMessageRows(chat);
+    msgRowTop = computeRowTops(msgRows);
+
+    if (!msgRows.length) {
+        $messages.innerHTML = '';
+        msgWindowStart = 0; msgWindowEnd = -1;
+        renderPinnedBar();
+        updateScrollBtn();
+        return;
+    }
+
+    let scrollTop;
+    const pending = pendingScrollTarget;
+    pendingScrollTarget = null;
+    let pendingIdx = -1;
+    if (pending) {
+        pendingIdx = msgRows.findIndex(r => r.type === 'msg' && r.msg.id === pending.id);
+        if (pendingIdx >= 0) {
+            const viewport = $messages.clientHeight || 400;
+            scrollTop = Math.max(0, msgRowTop[pendingIdx] - viewport / 2);
+        }
+    }
+    if (scrollTop === undefined) {
+        scrollTop = wasNearBottom ? msgRowTop[msgRows.length] : $messages.scrollTop;
+    }
+
+    renderWindowAt(scrollTop, true);
+
+    if (pending && pendingIdx >= 0) {
+        const el = $messages.querySelector(`.message[data-msg-id="${pending.id}"]`);
+        if (el && pending.flash) {
+            el.classList.add(pending.flash);
+            setTimeout(() => el.classList.remove(pending.flash), 900);
+        }
+    }
+
+    renderPinnedBar();
+    updateScrollBtn();
 }
 
 // ── Actions ─────────────────────────────────────────────────────────
@@ -3257,12 +3433,11 @@ function scrollToQuoted(qName, qText) {
         if (m.from === qName && bodyOf(m).startsWith(qText.slice(0, 40))) { target = m; break; }
     }
     if (!target) return;
-    const el = document.querySelector(`.message[data-msg-id="${target.id}"]`);
-    if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.add('reply-flash');
-        setTimeout(() => el.classList.remove('reply-flash'), 900);
-    }
+    // Virtualized: the target row may not be in the DOM right now if it's
+    // scrolled far out of view. Force the window onto it and let
+    // renderMessages() do the actual scroll+flash once it's rendered.
+    pendingScrollTarget = { id: target.id, flash: 'reply-flash' };
+    renderMessages();
 }
 
 // Close on click outside (but ignore the mouseup/click that opened the menu)
@@ -3627,12 +3802,8 @@ function unpinCurrent() {
 function scrollToPinned() {
     const chat = state.currentChat && state.chats[state.currentChat.id];
     if (!chat || !chat.pinnedId) return;
-    const el = document.querySelector(`.message[data-msg-id="${chat.pinnedId}"]`);
-    if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.add('reply-flash');
-        setTimeout(() => el.classList.remove('reply-flash'), 900);
-    }
+    pendingScrollTarget = { id: chat.pinnedId, flash: 'reply-flash' };
+    renderMessages();
 }
 
 // ── In-chat message search ──────────────────────────────────────────
@@ -3653,28 +3824,29 @@ function openChatSearch() {
 function closeChatSearch() {
     const bar = document.getElementById('chat-search-bar');
     if (bar) bar.style.display = 'none';
-    document.querySelectorAll('.message.search-hit, .message.search-current')
-        .forEach(el => el.classList.remove('search-hit', 'search-current'));
     chatSearchMatches = [];
     chatSearchIdx = -1;
+    renderMessages();
 }
 function runChatSearch() {
     const q = (document.getElementById('chat-search-input')?.value || '').trim().toLowerCase();
     const chat = state.currentChat && state.chats[state.currentChat.id];
-    document.querySelectorAll('.message.search-hit, .message.search-current')
-        .forEach(el => el.classList.remove('search-hit', 'search-current'));
     chatSearchMatches = [];
     chatSearchIdx = -1;
-    if (!q || !chat) { updateChatSearchCount(); return; }
-    for (const m of chat.messages) {
-        if (m.deleted) continue;
-        if (bodyOf(m).toLowerCase().includes(q)) chatSearchMatches.push(m.id);
+    if (q && chat) {
+        for (const m of chat.messages) {
+            if (m.deleted) continue;
+            if (bodyOf(m).toLowerCase().includes(q)) chatSearchMatches.push(m.id);
+        }
     }
-    chatSearchMatches.forEach(id => {
-        const el = document.querySelector(`.message[data-msg-id="${id}"]`);
-        if (el) el.classList.add('search-hit');
-    });
+    // search-hit/search-current are applied data-driven inside
+    // buildMessageNode() off chatSearchMatches/chatSearchIdx, so any render
+    // (including the jump focusSearchMatch() below triggers) picks up
+    // whatever's current here - no separate DOM-highlighting pass needed,
+    // which also means it stays correct for matches outside the virtualized
+    // window instead of silently skipping them.
     if (chatSearchMatches.length) { chatSearchIdx = 0; focusSearchMatch(); }
+    else renderMessages();
     updateChatSearchCount();
 }
 function chatSearchStep(dir) {
@@ -3684,10 +3856,10 @@ function chatSearchStep(dir) {
     updateChatSearchCount();
 }
 function focusSearchMatch() {
-    document.querySelectorAll('.message.search-current').forEach(el => el.classList.remove('search-current'));
     const id = chatSearchMatches[chatSearchIdx];
-    const el = document.querySelector(`.message[data-msg-id="${id}"]`);
-    if (el) { el.classList.add('search-current'); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    if (id == null) return;
+    pendingScrollTarget = { id };
+    renderMessages();
 }
 function updateChatSearchCount() {
     const el = document.getElementById('chat-search-count');

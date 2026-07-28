@@ -2770,11 +2770,19 @@ html[data-list-wallpaper="snow"] #chat-list {
 .chat-search-close { font-size: 20px; }
 
 /* Search hit highlighting */
-.message.search-hit { outline: 1px solid rgba(0,168,132,0.4); outline-offset: 1px; border-radius: 8px; }
+.message.search-hit { outline: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 1px; border-radius: 8px; }
 .message.search-current {
     outline: 2px solid var(--accent);
-    background: rgba(0,168,132,0.12) !important;
+    background: var(--accent-glow) !important;
     border-radius: 8px;
+}
+
+/* Virtualized message list spacers - stand in for rows outside the
+   rendered window so scrollHeight/scrollTop still behave as if the whole
+   history were there. See renderWindowAt() in app.js. */
+.msg-spacer {
+    flex-shrink: 0;
+    width: 100%;
 }
 
 /* Scroll-to-bottom button (positioning context already set by the base
