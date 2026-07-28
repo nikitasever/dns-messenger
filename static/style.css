@@ -1030,13 +1030,21 @@ body {
 }
 
 .modal {
-    background: var(--bg-sidebar);
-    border: 1px solid var(--border);
+    /* Glassmorphism: translucent + its own blur, layered on top of the
+       overlay's own blur(3px)+tint - two blur passes compositing through
+       each other is what gives the frosted-glass depth instead of just a
+       flat semi-transparent panel. The inset highlight fakes a light catching
+       the top edge of glass; skip it and the panel reads as plain tinted
+       plastic instead. */
+    background: color-mix(in srgb, var(--bg-sidebar) 78%, transparent);
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
     border-radius: var(--radius-lg);
     padding: 24px;
     min-width: 360px;
     max-width: 420px;
-    box-shadow: var(--shadow-lg);
+    box-shadow: var(--shadow-lg), inset 0 1px 0 color-mix(in srgb, var(--text) 10%, transparent);
     animation: modalIn var(--bounce) forwards;
 }
 
