@@ -694,11 +694,43 @@ function renderChatList() {
                 ${chat.unread ? `<span class="unread-badge">${chat.unread}</span>` : ''}
             </div>
         `;
-        // Long-press to pin/unpin on touch
+        // Long-press to pin/unpin, plus swipe (either direction - it's a
+        // toggle, not two separate actions like the message swipe-to-reply)
+        // as a faster alternative on touch. Mirrors the swipe mechanics
+        // already used for messages (damped drag, flash past threshold,
+        // spring back on release).
         let cpTimer;
-        div.addEventListener('touchstart', () => { cpTimer = setTimeout(() => toggleChatPin(id), 550); }, { passive: true });
-        div.addEventListener('touchend', () => clearTimeout(cpTimer));
-        div.addEventListener('touchmove', () => clearTimeout(cpTimer));
+        let swipeStartX = 0, swipeStartY = 0, chatSwiping = false, chatSwipeFired = false;
+        const CHAT_SWIPE_THRESHOLD = 70;
+        div.addEventListener('touchstart', (e) => {
+            const t0 = e.touches[0];
+            swipeStartX = t0.clientX; swipeStartY = t0.clientY;
+            chatSwiping = true; chatSwipeFired = false;
+            cpTimer = setTimeout(() => { toggleChatPin(id); chatSwiping = false; }, 550);
+        }, { passive: true });
+        div.addEventListener('touchmove', (e) => {
+            clearTimeout(cpTimer);
+            if (!chatSwiping) return;
+            const t0 = e.touches[0];
+            const dx = t0.clientX - swipeStartX;
+            const dy = t0.clientY - swipeStartY;
+            if (Math.abs(dy) > 14) { chatSwiping = false; div.style.transform = ''; return; }
+            const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
+            div.style.transform = `translateX(${damped}px)`;
+            if (!chatSwipeFired && Math.abs(dx) > CHAT_SWIPE_THRESHOLD) {
+                chatSwipeFired = true;
+                navigator.vibrate?.(20);
+                div.classList.add('swipe-flash');
+            }
+        }, { passive: true });
+        div.addEventListener('touchend', () => {
+            clearTimeout(cpTimer);
+            div.style.transition = 'transform 0.25s ease';
+            div.style.transform = '';
+            setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
+            if (chatSwipeFired) toggleChatPin(id);
+            chatSwiping = false;
+        });
         $chatList.appendChild(div);
     }
     updateBadges();

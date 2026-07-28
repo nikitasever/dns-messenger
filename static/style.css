@@ -2122,7 +2122,11 @@ input[type="text"]:focus, input[type="password"]:focus {
     transition: background 0.2s ease, box-shadow 0.2s ease;
 }
 .message.swipe-flash {
-    background: rgba(0, 168, 132, 0.22) !important;
+    background: var(--accent-glow) !important;
+    transition: background 0.15s ease;
+}
+.chat-item.swipe-flash {
+    background: var(--accent-glow) !important;
     transition: background 0.15s ease;
 }
 @keyframes replyFlash {
