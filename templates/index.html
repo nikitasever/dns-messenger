@@ -53,8 +53,41 @@
         <!-- Notification banners -->
         <div id="notifications"></div>
 
-        <!-- Chat list -->
-        <div class="chat-list" id="chat-list"></div>
+        <!-- Chat list. Заполнено скелетон-плейсхолдерами: renderChatList()
+             в app.js делает $chatList.innerHTML = '' и полностью
+             перерисовывает список за один проход, так что как только придут
+             первые /api/groups и /api/users, разметка ниже целиком заменится
+             реальными чатами — никакой правки app.js не требуется. -->
+        <div class="chat-list" id="chat-list">
+            <div class="chat-item-skeleton" aria-hidden="true">
+                <div class="skel skel-avatar"></div>
+                <div class="skel-lines">
+                    <div class="skel skel-name"></div>
+                    <div class="skel skel-preview"></div>
+                </div>
+            </div>
+            <div class="chat-item-skeleton" aria-hidden="true">
+                <div class="skel skel-avatar"></div>
+                <div class="skel-lines">
+                    <div class="skel skel-name"></div>
+                    <div class="skel skel-preview"></div>
+                </div>
+            </div>
+            <div class="chat-item-skeleton" aria-hidden="true">
+                <div class="skel skel-avatar"></div>
+                <div class="skel-lines">
+                    <div class="skel skel-name"></div>
+                    <div class="skel skel-preview"></div>
+                </div>
+            </div>
+            <div class="chat-item-skeleton" aria-hidden="true">
+                <div class="skel skel-avatar"></div>
+                <div class="skel-lines">
+                    <div class="skel skel-name"></div>
+                    <div class="skel skel-preview"></div>
+                </div>
+            </div>
+        </div>
 
         <!-- FAB menu -->
         <div class="fab-menu" id="fab-menu">

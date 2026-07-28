@@ -163,6 +163,56 @@ body {
     background: var(--bg-hover);
 }
 
+/* Skeleton placeholders shown until the first /api/groups + /api/users
+   round-trip resolves and renderChatList() overwrites #chat-list for real. */
+.chat-item-skeleton {
+    padding: 9px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.skel {
+    border-radius: var(--radius-sm);
+    background: linear-gradient(
+        90deg,
+        var(--bg-hover) 25%,
+        var(--border-light) 50%,
+        var(--bg-hover) 75%
+    );
+    background-size: 200% 100%;
+    animation: skeletonShimmer 1.4s ease-in-out infinite;
+}
+
+.skel-avatar {
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.skel-lines {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.skel-name {
+    height: 13px;
+    width: 45%;
+}
+
+.skel-preview {
+    height: 12px;
+    width: 75%;
+}
+
+@keyframes skeletonShimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
 .chat-item.active {
     background: var(--bg-active);
 }
