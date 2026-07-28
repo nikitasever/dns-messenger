@@ -411,6 +411,7 @@ const paneA = {
     forceBottom: false,
     replyingTo: null,
     searchMatches: [], searchIdx: -1,
+    typingSentAt: 0, typingStopTimer: null,
 };
 let paneB = null;
 function ensurePaneB() {
@@ -432,6 +433,7 @@ function ensurePaneB() {
         forceBottom: false,
         replyingTo: null,
         searchMatches: [], searchIdx: -1,
+        typingSentAt: 0, typingStopTimer: null,
     };
     paneB.$sendBtn.addEventListener('click', () => sendMessageInPane(paneB));
     paneB.$msgInput.addEventListener('keydown', (e) => {
@@ -440,6 +442,7 @@ function ensurePaneB() {
     paneB.$msgInput.addEventListener('input', () => {
         paneB.$msgInput.style.height = 'auto';
         paneB.$msgInput.style.height = Math.min(paneB.$msgInput.scrollHeight, 120) + 'px';
+        handleTypingInput(paneB);
     });
     paneB.$messages.addEventListener('scroll', () => {
         if (paneB.scrollRenderQueued) return;
@@ -713,6 +716,9 @@ function renderHeaderB() {
         ${avatarHtml(chat.name, isGroup, 'sm')}
         <div class="header-info">
             <div class="chat-title">${esc(chat.name)}</div>
+            <div class="chat-subtitle">
+                <span class="typing-text" style="display:none;color:var(--green);font-style:italic"></span>
+            </div>
         </div>
         <div class="header-actions">
             <button onclick="openChatSearch(paneB)" title="Поиск по чату">&#x1F50D;</button>
@@ -731,6 +737,11 @@ async function sendMessageInPane(pane) {
     if (!pane.currentChat || !pane.$msgInput.value.trim()) return;
     let text = pane.$msgInput.value.trim();
     pane.$msgInput.value = '';
+    if (pane.typingSentAt) {
+        try { emitTyping(false, pane); } catch (e) {}
+        pane.typingSentAt = 0;
+        clearTimeout(pane.typingStopTimer);
+    }
     pane.$msgInput.style.height = 'auto';
 
     if (pane.replyingTo) {
@@ -1512,10 +1523,10 @@ async function sendMessage() {
     let text = $msgInput.value.trim();
     $msgInput.value = '';
     $msgInput.style.height = 'auto';
-    if (typeof typingSentAt !== 'undefined' && typingSentAt) {
-        try { emitTyping(false); } catch(e) {}
-        typingSentAt = 0;
-        if (typeof typingStopTimer !== 'undefined') clearTimeout(typingStopTimer);
+    if (paneA.typingSentAt) {
+        try { emitTyping(false, paneA); } catch(e) {}
+        paneA.typingSentAt = 0;
+        clearTimeout(paneA.typingStopTimer);
     }
 
     const chat = state.chats[state.currentChat.id];
@@ -4834,37 +4845,41 @@ $msgInput?.addEventListener('keydown', (e) => {
 $sendBtn?.addEventListener('click', sendMessage);
 
 // ── Typing indicator ────────────────────────────────────────────────
-let typingSentAt = 0;
-let typingStopTimer = null;
-function emitTyping(isTyping) {
-    if (!state.currentChat) return;
+// typingSentAt/typingStopTimer live on each pane (like replyingTo/search)
+// so pane A and pane B each throttle+emit typing for their own open chat.
+function emitTyping(isTyping, pane = paneA) {
+    if (!pane.currentChat) return;
     socket.emit('typing', {
-        to: state.currentChat.id,
-        group: state.currentChat.type === 'group',
+        to: pane.currentChat.id,
+        group: pane.currentChat.type === 'group',
         typing: !!isTyping,
     });
+}
+
+function handleTypingInput(pane) {
+    // Throttle typing event to once every 3s while user is typing
+    const now = Date.now();
+    if (pane.$msgInput.value.trim()) {
+        if (now - pane.typingSentAt > 3000) {
+            emitTyping(true, pane);
+            pane.typingSentAt = now;
+        }
+        clearTimeout(pane.typingStopTimer);
+        pane.typingStopTimer = setTimeout(() => {
+            emitTyping(false, pane);
+            pane.typingSentAt = 0;
+        }, 3500);
+    } else if (pane.typingSentAt) {
+        clearTimeout(pane.typingStopTimer);
+        emitTyping(false, pane);
+        pane.typingSentAt = 0;
+    }
 }
 
 $msgInput?.addEventListener('input', () => {
     $msgInput.style.height = 'auto';
     $msgInput.style.height = Math.min($msgInput.scrollHeight, 120) + 'px';
-    // Throttle typing event to once every 3s while user is typing
-    const now = Date.now();
-    if ($msgInput.value.trim()) {
-        if (now - typingSentAt > 3000) {
-            emitTyping(true);
-            typingSentAt = now;
-        }
-        clearTimeout(typingStopTimer);
-        typingStopTimer = setTimeout(() => {
-            emitTyping(false);
-            typingSentAt = 0;
-        }, 3500);
-    } else if (typingSentAt) {
-        clearTimeout(typingStopTimer);
-        emitTyping(false);
-        typingSentAt = 0;
-    }
+    handleTypingInput(paneA);
 });
 
 // Stop typing once message is sent
@@ -4906,20 +4921,27 @@ socket.on('typing', (data) => {
     updateTypingUI(chatId);
 });
 
+// A typing event names a chat, not a pane - if that chat happens to be open
+// in both panes at once, both headers should reflect it.
 function updateTypingUI(chatId) {
-    if (!state.currentChat || state.currentChat.id !== chatId) return;
+    updateTypingUIForPane(paneA, chatId);
+    if (paneB) updateTypingUIForPane(paneB, chatId);
+}
+function updateTypingUIForPane(pane, chatId) {
+    if (!pane.currentChat || pane.currentChat.id !== chatId) return;
     const st = typingState[chatId];
-    const subtitle = $chatHeader.querySelector('.subtitle-text');
-    const typingEl = $chatHeader.querySelector('.typing-text');
-    if (!typingEl || !subtitle) return;
+    const subtitle = pane.$chatHeader.querySelector('.subtitle-text');
+    const typingEl = pane.$chatHeader.querySelector('.typing-text');
+    if (!typingEl) return;
     const users = st ? Array.from(st.users) : [];
     if (users.length === 0) {
         typingEl.style.display = 'none';
-        subtitle.style.display = '';
+        if (subtitle) subtitle.style.display = '';
         return;
     }
     let txt;
-    if (state.currentChat.type === 'group') {
+    const chat = state.chats[chatId];
+    if (chat && chat.type === 'group') {
         txt = users.length === 1
             ? `${users[0]} ${t('typing_one') || 'печатает...'}`
             : `${users.join(', ')} ${t('typing_many') || 'печатают...'}`;
@@ -4928,7 +4950,7 @@ function updateTypingUI(chatId) {
     }
     typingEl.textContent = txt;
     typingEl.style.display = '';
-    subtitle.style.display = 'none';
+    if (subtitle) subtitle.style.display = 'none';
 }
 
 $searchInput?.addEventListener('input', () => renderChatList());
@@ -5020,13 +5042,17 @@ async function fetchLastSeen(username) {
     try {
         const res = await fetch(`/api/last-seen/${username}`).then(r => r.json());
         lastSeenCache[username] = res;
-        // Update header if still viewing this chat
+        // Update header if still viewing this chat. Patches the dot/text in
+        // place (scoped to pane A's own header) rather than replacing
+        // .chat-subtitle's innerHTML wholesale, which used to silently wipe
+        // out the .typing-text span living alongside it.
         if (state.currentChat?.id === username) {
-            const sub = document.querySelector('.chat-header .chat-subtitle');
-            const dot = document.querySelector('.chat-header .online-dot');
+            const sub = $chatHeader.querySelector('.chat-subtitle');
             if (sub) {
-                const text = formatLastSeen(res);
-                sub.innerHTML = `<span class="online-dot" style="background:${res.online ? 'var(--green)' : 'var(--text-muted)'}"></span> ${esc(text)}`;
+                const dot = sub.querySelector('.online-dot');
+                const subtitleText = sub.querySelector('.subtitle-text');
+                if (dot) dot.style.background = res.online ? 'var(--green)' : 'var(--text-muted)';
+                if (subtitleText) subtitleText.textContent = formatLastSeen(res);
             }
         }
     } catch (e) {}
