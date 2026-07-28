@@ -452,6 +452,12 @@
                     return;
                 }
                 if (res.ok) {
+                    // 'register' always makes a new account; 'anonymous' has no
+                    // persistent identity to log back into (server rejects a
+                    // second claim of the same name while it's active), so both
+                    // are always a first login - 'login' against an existing
+                    // account is not.
+                    if (mode !== 'login') sessionStorage.setItem('dns_celebrate', '1');
                     window.location.href = '/';
                 } else {
                     errEl.textContent = res.error || d.err_def;

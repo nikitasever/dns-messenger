@@ -4652,6 +4652,27 @@ async function init() {
     } catch (e) {}
 
     renderChatList();
+    celebrateIfFirstLogin();
+}
+
+// ── Confetti on first login ──────────────────────────────────────────
+// login.html sets this sessionStorage flag right before redirecting here,
+// only for a fresh registration or anonymous-mode signup (not a plain
+// returning login) - see doLogin() there. canvas-confetti is ~11KB, so it's
+// fetched on demand instead of on every page load.
+function celebrateIfFirstLogin() {
+    if (sessionStorage.getItem('dns_celebrate') !== '1') return;
+    sessionStorage.removeItem('dns_celebrate');
+    if (document.documentElement.classList.contains('no-anim')) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const script = document.createElement('script');
+    script.src = '/static/vendor/confetti.min.js';
+    script.onload = () => {
+        if (typeof window.confetti !== 'function') return;
+        window.confetti({ particleCount: 120, spread: 90, origin: { y: 0.6 } });
+    };
+    document.body.appendChild(script);
 }
 
 init();
