@@ -414,6 +414,28 @@
             }
         }
 
+        // Web Animations API instead of a CSS class toggle so it never
+        // fights the card's own .login-card animation shorthand (cardIn) —
+        // a class-based approach would change animation-name and replay
+        // the entrance fade every time the shake ends.
+        function shakeLoginCard() {
+            if (document.documentElement.classList.contains('no-anim')) return;
+            const card = document.querySelector('.login-card');
+            if (!card || !card.animate) return;
+            card.animate(
+                [
+                    { transform: 'translateX(0)' },
+                    { transform: 'translateX(-6px)' },
+                    { transform: 'translateX(5px)' },
+                    { transform: 'translateX(-4px)' },
+                    { transform: 'translateX(3px)' },
+                    { transform: 'translateX(-2px)' },
+                    { transform: 'translateX(0)' },
+                ],
+                { duration: 350, easing: 'ease-in-out' }
+            );
+        }
+
         async function doLogin(e) {
             e.preventDefault();
             const d = T();
@@ -445,6 +467,7 @@
                     } catch (werr) {
                         errEl.textContent = (lang === 'ru' ? 'Passkey: ' : 'Passkey: ') + werr.message;
                         errEl.style.display = 'block';
+                        shakeLoginCard();
                         btn.disabled = false;
                         btn.textContent = origText;
                         showBackupCodeOption();
@@ -462,12 +485,14 @@
                 } else {
                     errEl.textContent = res.error || d.err_def;
                     errEl.style.display = 'block';
+                    shakeLoginCard();
                     btn.disabled = false;
                     btn.textContent = origText;
                 }
             } catch (err) {
                 errEl.textContent = d.err_conn;
                 errEl.style.display = 'block';
+                shakeLoginCard();
                 btn.disabled = false;
                 btn.textContent = origText;
             }
@@ -506,10 +531,12 @@
                 } else {
                     errEl.textContent = res.error || d.backup_err;
                     errEl.style.display = 'block';
+                    shakeLoginCard();
                 }
             } catch (e) {
                 errEl.textContent = d.err_conn;
                 errEl.style.display = 'block';
+                shakeLoginCard();
             } finally {
                 submitBtn.disabled = false;
                 submitBtn.textContent = orig;
@@ -548,10 +575,12 @@
                 } else {
                     errEl.textContent = res.error || d.forgot_err;
                     errEl.style.display = 'block';
+                    shakeLoginCard();
                 }
             } catch (e) {
                 errEl.textContent = d.err_conn;
                 errEl.style.display = 'block';
+                shakeLoginCard();
             } finally {
                 submitBtn.disabled = false;
                 submitBtn.textContent = orig;
