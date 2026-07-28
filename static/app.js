@@ -390,6 +390,79 @@ const $sendBtn     = $('#send-btn');
 const $fileInput   = $('#file-input');
 const $searchInput = $('#search-input');
 const $toasts      = $('#toast-container');
+
+// ── Split view: pane A is the original single-pane UI (its currentChat
+// getter/setter proxies straight to state.currentChat, so every existing
+// piece of code that reads/writes state.currentChat directly - calls,
+// uploads, reactions, context menu, forwarding, all of it - keeps working
+// completely unchanged). Pane B is a second, independent chat viewer added
+// this stage: chat selection + virtualized read view + plain text send
+// only, its own currentChat that nothing else touches.
+const paneA = {
+    suffix: '',
+    $chatHeader, $messages, $inputArea, $noChat, $msgInput, $sendBtn,
+    $scrollBtn: document.getElementById('scroll-bottom-btn'),
+    $scrollUnread: document.getElementById('scroll-unread'),
+    get currentChat() { return state.currentChat; },
+    set currentChat(v) { state.currentChat = v; },
+    msgRows: [], msgRowTop: [], msgWindowStart: 0, msgWindowEnd: -1,
+    pendingScrollTarget: null,
+    scrollRenderQueued: false,
+    forceBottom: false,
+};
+let paneB = null;
+function ensurePaneB() {
+    if (paneB) return paneB;
+    paneB = {
+        suffix: 'b',
+        $chatHeader: document.getElementById('chat-header-b'),
+        $messages: document.getElementById('messages-b'),
+        $inputArea: document.getElementById('input-area-b'),
+        $noChat: document.getElementById('no-chat-b'),
+        $msgInput: document.getElementById('msg-input-b'),
+        $sendBtn: document.getElementById('send-btn-b'),
+        $scrollBtn: document.getElementById('scroll-bottom-btn-b'),
+        $scrollUnread: document.getElementById('scroll-unread-b'),
+        currentChat: null,
+        msgRows: [], msgRowTop: [], msgWindowStart: 0, msgWindowEnd: -1,
+        pendingScrollTarget: null,
+        scrollRenderQueued: false,
+        forceBottom: false,
+    };
+    paneB.$sendBtn.addEventListener('click', () => sendMessageInPane(paneB));
+    paneB.$msgInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessageInPane(paneB); }
+    });
+    paneB.$msgInput.addEventListener('input', () => {
+        paneB.$msgInput.style.height = 'auto';
+        paneB.$msgInput.style.height = Math.min(paneB.$msgInput.scrollHeight, 120) + 'px';
+    });
+    paneB.$messages.addEventListener('scroll', () => {
+        if (paneB.scrollRenderQueued) return;
+        paneB.scrollRenderQueued = true;
+        requestAnimationFrame(() => {
+            paneB.scrollRenderQueued = false;
+            renderWindowAt(paneB, paneB.$messages.scrollTop, false);
+            updateScrollBtn(paneB);
+        });
+    });
+    return paneB;
+}
+
+function toggleSplitView() {
+    const el = document.getElementById('chat-area-b');
+    const btn = document.getElementById('split-view-btn');
+    if (!el) return;
+    const isOpen = el.style.display !== 'none';
+    if (isOpen) {
+        el.style.display = 'none';
+        btn?.classList.remove('active');
+    } else {
+        ensurePaneB();
+        el.style.display = 'flex';
+        btn?.classList.add('active');
+    }
+}
 const $notifs      = $('#notifications');
 
 // ── Toast notifications ─────────────────────────────────────────────
@@ -599,6 +672,81 @@ function goBack() {
     renderChatList();
 }
 
+// Pane B's chat selection - kept separate from selectChat() rather than
+// generalizing it, so the primary pane's entry point (called from ~dozens
+// of onclick handlers throughout the file) stays completely untouched.
+function selectChatInPane(pane, id) {
+    const chat = state.chats[id];
+    if (!chat) return;
+    pane.currentChat = { type: chat.type, id };
+    chat.unread = 0;
+    if (chat.type === 'dm') {
+        try { socket.emit('read', { to: id }); } catch(e) {}
+    }
+    saveState();
+    renderChatList();
+    pane.$noChat.style.display = 'none';
+    pane.$chatHeader.style.display = '';
+    pane.$messages.style.display = '';
+    pane.$inputArea.style.display = '';
+    renderHeaderB();
+    renderMessagesForPane(pane);
+}
+
+// Minimal header for the second pane - Stage 1 doesn't duplicate calls,
+// in-chat search, or group member management there yet.
+function renderHeaderB() {
+    if (!paneB || !paneB.currentChat) return;
+    const chat = state.chats[paneB.currentChat.id];
+    if (!chat) return;
+    const isGroup = chat.type === 'group';
+    paneB.$chatHeader.innerHTML = `
+        ${avatarHtml(chat.name, isGroup, 'sm')}
+        <div class="header-info">
+            <div class="chat-title">${esc(chat.name)}</div>
+        </div>
+        <div class="header-actions">
+            <button onclick="closePaneB()" title="Закрыть">&times;</button>
+        </div>
+    `;
+}
+
+function closePaneB() {
+    if (paneB) paneB.currentChat = null;
+    toggleSplitView();
+}
+
+async function sendMessageInPane(pane) {
+    if (pane === paneA) return sendMessage();
+    if (!pane.currentChat || !pane.$msgInput.value.trim()) return;
+    const text = pane.$msgInput.value.trim();
+    pane.$msgInput.value = '';
+    pane.$msgInput.style.height = 'auto';
+
+    const chat = state.chats[pane.currentChat.id];
+    const ts = Date.now();
+    addMessage(pane.currentChat.id, { from: state.username, text, ts });
+    pane.forceBottom = true;
+    renderMessagesForPane(pane);
+    renderChatList();
+
+    const url = chat.type === 'group' ? '/api/groups/send' : '/api/send';
+    const body = chat.type === 'group'
+        ? { group: pane.currentChat.id, text }
+        : { to: pane.currentChat.id, text };
+
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(r => r.json());
+        if (!res.ok) toast(res.error || t('send_error'), 'error');
+    } catch (e) {
+        toast(t('server_unavailable'), 'error');
+    }
+}
+
 // ── Tabs ────────────────────────────────────────────────────────────
 function initTabs() {
     document.querySelectorAll('.tab').forEach(tab => {
@@ -695,7 +843,16 @@ function renderChatList() {
         const div = document.createElement('div');
         div.className = `chat-item${isActive ? ' active' : ''}${chat.chatPinned ? ' chat-pinned' : ''}`;
         div.dataset.chatId = id;
-        div.onclick = () => selectChat(id);
+        div.onclick = (e) => {
+            // Ctrl/Cmd-click routes into the second pane instead of the
+            // primary one, when split view is actually open - otherwise a
+            // stray modifier-click would silently do nothing.
+            if ((e.ctrlKey || e.metaKey) && document.getElementById('chat-area-b')?.style.display !== 'none' && paneB) {
+                selectChatInPane(paneB, id);
+            } else {
+                selectChat(id);
+            }
+        };
         div.oncontextmenu = (e) => { e.preventDefault(); toggleChatPin(id); };
         div.innerHTML = `
             ${chat.chatPinned ? '<span class="pin-drag-handle" title="Перетащить">⠿</span>' : ''}
@@ -873,14 +1030,10 @@ function renderHeader() {
 const rowHeightCache = new Map();
 const DEFAULT_ROW_HEIGHT = 56;
 const ROW_OVERSCAN = 8;
-let msgRows = [];
-let msgRowTop = [];
-let msgWindowStart = 0;
-let msgWindowEnd = -1;
-// Set by scrollToQuoted/scrollToPinned/focusSearchMatch to force the
-// window onto a specific message (which may be far outside the current
-// viewport) before scrolling to it - see renderMessages().
-let pendingScrollTarget = null;
+// msgRows/msgRowTop/msgWindowStart/msgWindowEnd/pendingScrollTarget all
+// live on each pane object now (paneA/paneB) instead of as module globals -
+// scrollToQuoted/scrollToPinned/focusSearchMatch set paneA.pendingScrollTarget
+// to force the window onto a specific message before scrolling to it.
 
 // Metadata-only pass: exactly the grouping/date-separator logic the old
 // single-pass loop used, just producing descriptors instead of DOM so it
@@ -929,7 +1082,7 @@ function findRowAtOffset(rowTop, offset) {
     return Math.max(0, rowTop.length - 2);
 }
 
-function buildRowNode(row) {
+function buildRowNode(row, pane) {
     if (row.type === 'date') {
         const sep = document.createElement('div');
         sep.className = 'date-separator';
@@ -942,7 +1095,7 @@ function buildRowNode(row) {
         sys.innerHTML = `<span>${esc(row.msg.text)}</span>`;
         return sys;
     }
-    return buildMessageNode(row.msg, row.isNew, row.isGroup);
+    return buildMessageNode(row.msg, row.isNew, row.isGroup, pane);
 }
 
 // Builds one .message DOM node - unchanged from the previous single-pass
@@ -950,7 +1103,14 @@ function buildRowNode(row) {
 // swipe/context-menu/reaction wiring), just extracted so it can be called
 // per-row from the windowed renderer instead of once per message in the
 // full history.
-function buildMessageNode(msg, isNew, isGroup) {
+//
+// Split view stage 1: the second pane only gets the read view + reaction
+// *display* - context menu, swipe-to-reply/pin, and search highlighting
+// are pane-A-only for now (they're wired through singular globals like
+// ctxTargetMsg/chatSearchMatches that don't know which pane triggered
+// them), so they're skipped here rather than attached and silently acting
+// on the wrong pane.
+function buildMessageNode(msg, isNew, isGroup, pane) {
     const isMine = msg.from === state.username;
     const div = document.createElement('div');
 
@@ -1084,109 +1244,114 @@ function buildMessageNode(msg, isNew, isGroup) {
 
         if (authWarn) { div.classList.add('msg-unverified'); div.insertAdjacentHTML('afterbegin', authWarn); }
 
-        // Search/pinned highlight - data-driven off chatSearchMatches/pinnedId
-        // rather than a post-render DOM query, so it stays correct however the
-        // virtualized window happens to be sliced (a match scrolled out of the
-        // DOM still gets highlighted the moment it scrolls back into the window).
-        if (msg.id && chatSearchMatches.includes(msg.id)) {
-            div.classList.add('search-hit');
-            if (msg.id === chatSearchMatches[chatSearchIdx]) div.classList.add('search-current');
-        }
-        const curChat = state.currentChat && state.chats[state.currentChat.id];
+        // Pinned highlight uses this pane's own chat, not a global - pane B
+        // has an independent currentChat.
+        const curChat = pane.currentChat && state.chats[pane.currentChat.id];
         if (curChat && curChat.pinnedId === msg.id) div.classList.add('is-pinned');
 
-        // Reply-quote click: attached here (not inline onclick) so replyQName/
-        // replyQText travel as real JS values, never serialized into an attribute
-        // that gets parsed as code.
-        const quoteEl = div.querySelector('.reply-quote');
-        if (quoteEl) {
-            quoteEl.addEventListener('click', (e) => {
-                e.stopPropagation();
-                scrollToQuoted(replyQName, replyQText);
-            });
-        }
+        if (pane === paneA) {
+            // Search/pinned highlight - data-driven off chatSearchMatches/pinnedId
+            // rather than a post-render DOM query, so it stays correct however the
+            // virtualized window happens to be sliced (a match scrolled out of the
+            // DOM still gets highlighted the moment it scrolls back into the window).
+            if (msg.id && chatSearchMatches.includes(msg.id)) {
+                div.classList.add('search-hit');
+                if (msg.id === chatSearchMatches[chatSearchIdx]) div.classList.add('search-current');
+            }
 
-        // Context menu on right-click and long-press
-        div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg); });
+            // Reply-quote click: attached here (not inline onclick) so replyQName/
+            // replyQText travel as real JS values, never serialized into an attribute
+            // that gets parsed as code.
+            const quoteEl = div.querySelector('.reply-quote');
+            if (quoteEl) {
+                quoteEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    scrollToQuoted(replyQName, replyQText);
+                });
+            }
 
-        // Swipe-to-reply (Telegram-like) + long-press context menu
-        let longPressTimer;
-        let swipeStartX = 0, swipeStartY = 0, swipeDX = 0, swiping = false, swipeFired = false;
-        const SWIPE_THRESHOLD = 60;
-        const swipeDir = isMine ? -1 : 1; // own messages swipe left, others right
-        div.addEventListener('touchstart', (e) => {
-            const t0 = e.touches[0];
-            swipeStartX = t0.clientX;
-            swipeStartY = t0.clientY;
-            swipeDX = 0; swiping = true; swipeFired = false;
-            div.classList.add('holding');
-            longPressTimer = setTimeout(() => {
-                navigator.vibrate?.(15);
-                showContextMenu(t0, msg);
+            // Context menu on right-click and long-press
+            div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg); });
+
+            // Swipe-to-reply (Telegram-like) + long-press context menu
+            let longPressTimer;
+            let swipeStartX = 0, swipeStartY = 0, swipeDX = 0, swiping = false, swipeFired = false;
+            const SWIPE_THRESHOLD = 60;
+            const swipeDir = isMine ? -1 : 1; // own messages swipe left, others right
+            div.addEventListener('touchstart', (e) => {
+                const t0 = e.touches[0];
+                swipeStartX = t0.clientX;
+                swipeStartY = t0.clientY;
+                swipeDX = 0; swiping = true; swipeFired = false;
+                div.classList.add('holding');
+                longPressTimer = setTimeout(() => {
+                    navigator.vibrate?.(15);
+                    showContextMenu(t0, msg);
+                    swiping = false;
+                }, 500);
+            }, { passive: true });
+            div.addEventListener('touchmove', (e) => {
+                if (!swiping) return;
+                const t0 = e.touches[0];
+                const dx = t0.clientX - swipeStartX;
+                const dy = t0.clientY - swipeStartY;
+                if (Math.abs(dy) > 14) { swiping = false; clearTimeout(longPressTimer); div.style.transform = ''; return; }
+                if (Math.abs(dx) > 6) clearTimeout(longPressTimer);
+                // Only allow swipe in the right direction
+                if (Math.sign(dx) !== swipeDir && dx !== 0) return;
+                swipeDX = dx;
+                const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
+                div.style.transform = `translateX(${damped}px)`;
+                if (!swipeFired && Math.abs(dx) > SWIPE_THRESHOLD) {
+                    swipeFired = true;
+                    navigator.vibrate?.(20);
+                    div.classList.add('swipe-flash');
+                }
+            }, { passive: true });
+            div.addEventListener('touchend', () => {
+                clearTimeout(longPressTimer);
+                div.classList.remove('holding');
+                div.style.transition = 'transform 0.25s ease';
+                div.style.transform = '';
+                setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
+                if (swipeFired) startReply(msg);
                 swiping = false;
-            }, 500);
-        }, { passive: true });
-        div.addEventListener('touchmove', (e) => {
-            if (!swiping) return;
-            const t0 = e.touches[0];
-            const dx = t0.clientX - swipeStartX;
-            const dy = t0.clientY - swipeStartY;
-            if (Math.abs(dy) > 14) { swiping = false; clearTimeout(longPressTimer); div.style.transform = ''; return; }
-            if (Math.abs(dx) > 6) clearTimeout(longPressTimer);
-            // Only allow swipe in the right direction
-            if (Math.sign(dx) !== swipeDir && dx !== 0) return;
-            swipeDX = dx;
-            const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
-            div.style.transform = `translateX(${damped}px)`;
-            if (!swipeFired && Math.abs(dx) > SWIPE_THRESHOLD) {
-                swipeFired = true;
-                navigator.vibrate?.(20);
-                div.classList.add('swipe-flash');
-            }
-        }, { passive: true });
-        div.addEventListener('touchend', () => {
-            clearTimeout(longPressTimer);
-            div.classList.remove('holding');
-            div.style.transition = 'transform 0.25s ease';
-            div.style.transform = '';
-            setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
-            if (swipeFired) startReply(msg);
-            swiping = false;
-        });
+            });
 
-        // Mouse drag swipe (desktop)
-        let mDown = false, mStartX = 0, mFired = false;
-        let mHoldTimer;
-        div.addEventListener('mousedown', (e) => {
-            if (e.button !== 0) return;
-            mDown = true; mStartX = e.clientX; mFired = false;
-            div.classList.add('holding');
-            mHoldTimer = setTimeout(() => { showContextMenu(e, msg); }, 500);
-        });
-        div.addEventListener('mousemove', (e) => {
-            if (!mDown) return;
-            const dx = e.clientX - mStartX;
-            if (Math.abs(dx) > 6) clearTimeout(mHoldTimer);
-            if (Math.sign(dx) !== swipeDir && dx !== 0) return;
-            const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
-            div.style.transform = `translateX(${damped}px)`;
-            if (!mFired && Math.abs(dx) > SWIPE_THRESHOLD) {
-                mFired = true;
-                div.classList.add('swipe-flash');
-            }
-        });
-        const mUp = () => {
-            if (!mDown) return;
-            mDown = false;
-            clearTimeout(mHoldTimer);
-            div.classList.remove('holding');
-            div.style.transition = 'transform 0.25s ease';
-            div.style.transform = '';
-            setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
-            if (mFired) startReply(msg);
-        };
-    div.addEventListener('mouseup', mUp);
-    div.addEventListener('mouseleave', mUp);
+            // Mouse drag swipe (desktop)
+            let mDown = false, mStartX = 0, mFired = false;
+            let mHoldTimer;
+            div.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                mDown = true; mStartX = e.clientX; mFired = false;
+                div.classList.add('holding');
+                mHoldTimer = setTimeout(() => { showContextMenu(e, msg); }, 500);
+            });
+            div.addEventListener('mousemove', (e) => {
+                if (!mDown) return;
+                const dx = e.clientX - mStartX;
+                if (Math.abs(dx) > 6) clearTimeout(mHoldTimer);
+                if (Math.sign(dx) !== swipeDir && dx !== 0) return;
+                const damped = Math.sign(dx) * Math.min(Math.abs(dx), 90);
+                div.style.transform = `translateX(${damped}px)`;
+                if (!mFired && Math.abs(dx) > SWIPE_THRESHOLD) {
+                    mFired = true;
+                    div.classList.add('swipe-flash');
+                }
+            });
+            const mUp = () => {
+                if (!mDown) return;
+                mDown = false;
+                clearTimeout(mHoldTimer);
+                div.classList.remove('holding');
+                div.style.transition = 'transform 0.25s ease';
+                div.style.transform = '';
+                setTimeout(() => { div.style.transition = ''; div.classList.remove('swipe-flash'); }, 300);
+                if (mFired) startReply(msg);
+            };
+            div.addEventListener('mouseup', mUp);
+            div.addEventListener('mouseleave', mUp);
+        }
 
     return div;
 }
@@ -1195,53 +1360,55 @@ function buildMessageNode(msg, isNew, isGroup) {
 // divs, then measures what actually got rendered to refine rowHeightCache.
 // force=true always rebuilds (used after data changes, e.g. a new message
 // or a toggled reaction, even if the index range happens to match).
-function renderWindowAt(scrollTop, force) {
-    if (!msgRows.length) {
-        $messages.innerHTML = '';
-        msgWindowStart = 0; msgWindowEnd = -1;
+function renderWindowAt(pane, scrollTop, force) {
+    if (!pane.msgRows.length) {
+        pane.$messages.innerHTML = '';
+        pane.msgWindowStart = 0; pane.msgWindowEnd = -1;
         return;
     }
-    const viewport = $messages.clientHeight || 400;
-    let start = findRowAtOffset(msgRowTop, scrollTop);
+    const viewport = pane.$messages.clientHeight || 400;
+    let start = findRowAtOffset(pane.msgRowTop, scrollTop);
     let end = start;
-    while (end < msgRows.length - 1 && msgRowTop[end + 1] < scrollTop + viewport) end++;
+    while (end < pane.msgRows.length - 1 && pane.msgRowTop[end + 1] < scrollTop + viewport) end++;
     start = Math.max(0, start - ROW_OVERSCAN);
-    end = Math.min(msgRows.length - 1, end + ROW_OVERSCAN);
+    end = Math.min(pane.msgRows.length - 1, end + ROW_OVERSCAN);
 
-    if (!force && start === msgWindowStart && end === msgWindowEnd) {
-        $messages.scrollTop = scrollTop;
+    if (!force && start === pane.msgWindowStart && end === pane.msgWindowEnd) {
+        pane.$messages.scrollTop = scrollTop;
         return;
     }
-    msgWindowStart = start;
-    msgWindowEnd = end;
+    pane.msgWindowStart = start;
+    pane.msgWindowEnd = end;
 
-    $messages.innerHTML = '';
+    pane.$messages.innerHTML = '';
     const topSpacer = document.createElement('div');
     topSpacer.className = 'msg-spacer';
-    topSpacer.style.height = msgRowTop[start] + 'px';
-    $messages.appendChild(topSpacer);
+    topSpacer.style.height = pane.msgRowTop[start] + 'px';
+    pane.$messages.appendChild(topSpacer);
 
-    for (let i = start; i <= end; i++) $messages.appendChild(buildRowNode(msgRows[i]));
+    for (let i = start; i <= end; i++) pane.$messages.appendChild(buildRowNode(pane.msgRows[i], pane));
 
     const bottomSpacer = document.createElement('div');
     bottomSpacer.className = 'msg-spacer';
-    bottomSpacer.style.height = Math.max(0, msgRowTop[msgRows.length] - msgRowTop[end + 1]) + 'px';
-    $messages.appendChild(bottomSpacer);
+    bottomSpacer.style.height = Math.max(0, pane.msgRowTop[pane.msgRows.length] - pane.msgRowTop[end + 1]) + 'px';
+    pane.$messages.appendChild(bottomSpacer);
 
-    $messages.scrollTop = scrollTop;
-    remeasureVisibleRows();
+    pane.$messages.scrollTop = scrollTop;
+    remeasureVisibleRows(pane);
 }
 
 // Measures the actual on-screen gap between consecutive rendered rows
 // (rather than el.offsetHeight alone) so the cached height already
 // includes whatever the CSS layout adds between rows (currently .messages'
 // flex `gap`) without this code needing to know that detail exists.
-function remeasureVisibleRows() {
-    const nodes = $messages.children; // [topSpacer, ...rows, bottomSpacer]
+// rowHeightCache is shared across panes (keyed by message id, so a row's
+// measured height is valid regardless of which pane rendered it first).
+function remeasureVisibleRows(pane) {
+    const nodes = pane.$messages.children; // [topSpacer, ...rows, bottomSpacer]
     if (nodes.length < 3) return;
     let changed = false;
     for (let i = 1; i < nodes.length - 1; i++) {
-        const row = msgRows[msgWindowStart + (i - 1)];
+        const row = pane.msgRows[pane.msgWindowStart + (i - 1)];
         if (!row) continue;
         const slot = nodes[i + 1].getBoundingClientRect().top - nodes[i].getBoundingClientRect().top;
         if (slot > 0 && Math.abs((rowHeightCache.get(row.key) || 0) - slot) > 0.5) {
@@ -1250,67 +1417,74 @@ function remeasureVisibleRows() {
         }
     }
     if (!changed) return;
-    msgRowTop = computeRowTops(msgRows);
-    nodes[0].style.height = msgRowTop[msgWindowStart] + 'px';
-    nodes[nodes.length - 1].style.height = Math.max(0, msgRowTop[msgRows.length] - msgRowTop[msgWindowEnd + 1]) + 'px';
+    pane.msgRowTop = computeRowTops(pane.msgRows);
+    nodes[0].style.height = pane.msgRowTop[pane.msgWindowStart] + 'px';
+    nodes[nodes.length - 1].style.height = Math.max(0, pane.msgRowTop[pane.msgRows.length] - pane.msgRowTop[pane.msgWindowEnd + 1]) + 'px';
 }
 
-let msgScrollRenderQueued = false;
-$messages.addEventListener('scroll', () => {
-    if (msgScrollRenderQueued) return;
-    msgScrollRenderQueued = true;
+paneA.$messages.addEventListener('scroll', () => {
+    if (paneA.scrollRenderQueued) return;
+    paneA.scrollRenderQueued = true;
     requestAnimationFrame(() => {
-        msgScrollRenderQueued = false;
-        renderWindowAt($messages.scrollTop, false);
-        updateScrollBtn();
+        paneA.scrollRenderQueued = false;
+        renderWindowAt(paneA, paneA.$messages.scrollTop, false);
+        updateScrollBtn(paneA);
     });
 });
 
+// renderMessages() stays the single chokepoint every existing call site
+// already uses ("something changed, refresh whatever's on screen") - it
+// now also refreshes pane B when it has a chat open, so none of those 25+
+// call sites throughout the file needed to change.
 function renderMessages() {
-    if (!state.currentChat) return;
-    const chat = state.chats[state.currentChat.id];
+    if (state.currentChat) renderMessagesForPane(paneA);
+    if (paneB && paneB.currentChat) renderMessagesForPane(paneB);
+}
+
+function renderMessagesForPane(pane) {
+    const chat = state.chats[pane.currentChat.id];
     if (!chat) return;
-    const wasNearBottom = renderMessages._forceBottom || isNearBottom();
-    renderMessages._forceBottom = false;
+    const wasNearBottom = pane.forceBottom || isNearBottomIn(pane);
+    pane.forceBottom = false;
 
-    msgRows = buildMessageRows(chat);
-    msgRowTop = computeRowTops(msgRows);
+    pane.msgRows = buildMessageRows(chat);
+    pane.msgRowTop = computeRowTops(pane.msgRows);
 
-    if (!msgRows.length) {
-        $messages.innerHTML = '';
-        msgWindowStart = 0; msgWindowEnd = -1;
-        renderPinnedBar();
-        updateScrollBtn();
+    if (!pane.msgRows.length) {
+        pane.$messages.innerHTML = '';
+        pane.msgWindowStart = 0; pane.msgWindowEnd = -1;
+        if (pane === paneA) renderPinnedBar();
+        updateScrollBtn(pane);
         return;
     }
 
     let scrollTop;
-    const pending = pendingScrollTarget;
-    pendingScrollTarget = null;
+    const pending = pane.pendingScrollTarget;
+    pane.pendingScrollTarget = null;
     let pendingIdx = -1;
     if (pending) {
-        pendingIdx = msgRows.findIndex(r => r.type === 'msg' && r.msg.id === pending.id);
+        pendingIdx = pane.msgRows.findIndex(r => r.type === 'msg' && r.msg.id === pending.id);
         if (pendingIdx >= 0) {
-            const viewport = $messages.clientHeight || 400;
-            scrollTop = Math.max(0, msgRowTop[pendingIdx] - viewport / 2);
+            const viewport = pane.$messages.clientHeight || 400;
+            scrollTop = Math.max(0, pane.msgRowTop[pendingIdx] - viewport / 2);
         }
     }
     if (scrollTop === undefined) {
-        scrollTop = wasNearBottom ? msgRowTop[msgRows.length] : $messages.scrollTop;
+        scrollTop = wasNearBottom ? pane.msgRowTop[pane.msgRows.length] : pane.$messages.scrollTop;
     }
 
-    renderWindowAt(scrollTop, true);
+    renderWindowAt(pane, scrollTop, true);
 
     if (pending && pendingIdx >= 0) {
-        const el = $messages.querySelector(`.message[data-msg-id="${pending.id}"]`);
+        const el = pane.$messages.querySelector(`.message[data-msg-id="${pending.id}"]`);
         if (el && pending.flash) {
             el.classList.add(pending.flash);
             setTimeout(() => el.classList.remove(pending.flash), 900);
         }
     }
 
-    renderPinnedBar();
-    updateScrollBtn();
+    if (pane === paneA) renderPinnedBar();
+    updateScrollBtn(pane);
 }
 
 // ── Actions ─────────────────────────────────────────────────────────
@@ -1355,7 +1529,7 @@ async function sendMessage() {
 
     const ts = Date.now();
     addMessage(state.currentChat.id, { from: state.username, text, ts });
-    renderMessages._forceBottom = true;
+    paneA.forceBottom = true;
     renderMessages();
     renderChatList();
 
@@ -1399,7 +1573,7 @@ $fileInput?.addEventListener('change', async () => {
     const ts = Date.now();
     const uploadId = 'up_' + ts;
     addMessage(state.currentChat.id, { from: state.username, file: file.name, size: file.size, ts, uploading: true, uploadId, id: uploadId });
-    renderMessages._forceBottom = true;
+    paneA.forceBottom = true;
     renderMessages();
     renderChatList();
 
@@ -3513,7 +3687,7 @@ function scrollToQuoted(qName, qText) {
     // Virtualized: the target row may not be in the DOM right now if it's
     // scrolled far out of view. Force the window onto it and let
     // renderMessages() do the actual scroll+flash once it's rendered.
-    pendingScrollTarget = { id: target.id, flash: 'reply-flash' };
+    paneA.pendingScrollTarget = { id: target.id, flash: 'reply-flash' };
     renderMessages();
 }
 
@@ -3879,7 +4053,7 @@ function unpinCurrent() {
 function scrollToPinned() {
     const chat = state.currentChat && state.chats[state.currentChat.id];
     if (!chat || !chat.pinnedId) return;
-    pendingScrollTarget = { id: chat.pinnedId, flash: 'reply-flash' };
+    paneA.pendingScrollTarget = { id: chat.pinnedId, flash: 'reply-flash' };
     renderMessages();
 }
 
@@ -3935,7 +4109,7 @@ function chatSearchStep(dir) {
 function focusSearchMatch() {
     const id = chatSearchMatches[chatSearchIdx];
     if (id == null) return;
-    pendingScrollTarget = { id };
+    paneA.pendingScrollTarget = { id };
     renderMessages();
 }
 function updateChatSearchCount() {
@@ -3946,20 +4120,21 @@ function updateChatSearchCount() {
 
 // ── Scroll-to-bottom button ─────────────────────────────────────────
 let scrollUnread = 0;
-function scrollMessagesToBottom(smooth) {
-    scrollUnread = 0;
-    updateScrollUnread();
-    if (!$messages) return;
-    $messages.scrollTo({ top: $messages.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+function scrollMessagesToBottom(smooth, pane) {
+    pane = pane || paneA;
+    if (pane === paneA) { scrollUnread = 0; updateScrollUnread(); }
+    if (!pane.$messages) return;
+    pane.$messages.scrollTo({ top: pane.$messages.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
 }
-function isNearBottom() {
-    if (!$messages) return true;
-    return $messages.scrollHeight - $messages.scrollTop - $messages.clientHeight < 120;
+function isNearBottomIn(pane) {
+    if (!pane.$messages) return true;
+    return pane.$messages.scrollHeight - pane.$messages.scrollTop - pane.$messages.clientHeight < 120;
 }
-function updateScrollBtn() {
-    const btn = document.getElementById('scroll-bottom-btn');
-    if (!btn) return;
-    btn.style.display = isNearBottom() ? 'none' : 'flex';
+function isNearBottom() { return isNearBottomIn(paneA); }
+function updateScrollBtn(pane) {
+    pane = pane || paneA;
+    if (!pane.$scrollBtn) return;
+    pane.$scrollBtn.style.display = isNearBottomIn(pane) ? 'none' : 'flex';
 }
 function updateScrollUnread() {
     const el = document.getElementById('scroll-unread');
@@ -4486,7 +4661,8 @@ socket.on('message', (msg) => {
     addMessage(chatId, { from: msg.from, text: msg.text, ts, auth: msg.auth });
 
     const isCurrent = state.currentChat && state.currentChat.id === chatId;
-    if (!isCurrent) {
+    const isCurrentB = paneB && paneB.currentChat && paneB.currentChat.id === chatId;
+    if (!isCurrent && !isCurrentB) {
         chat.unread = (chat.unread || 0) + 1;
         saveState();
     }
@@ -4504,8 +4680,10 @@ socket.on('message', (msg) => {
     renderChatList();
     if (isCurrent) {
         const wasNear = isNearBottom();
-        renderMessages();
+        renderMessages(); // covers pane B too if it happens to show this same chat
         if (!wasNear && msg.from !== state.username) { scrollUnread++; updateScrollUnread(); updateScrollBtn(); }
+    } else if (isCurrentB) {
+        renderMessagesForPane(paneB);
     }
 });
 
@@ -4521,13 +4699,15 @@ socket.on('file', (info) => {
     if (isVideoMsg) msg.videoMsg = true;
     addMessage(info.from, msg);
 
-    if (!state.currentChat || state.currentChat.id !== info.from) {
+    const isCurrentB = paneB && paneB.currentChat && paneB.currentChat.id === info.from;
+    if ((!state.currentChat || state.currentChat.id !== info.from) && !isCurrentB) {
         chat.unread = (chat.unread || 0) + 1;
         saveState();
     }
 
     renderChatList();
     if (state.currentChat?.id === info.from) renderMessages();
+    else if (isCurrentB) renderMessagesForPane(paneB);
 
     // Notify
     if (getSetting('notifSound', true)) playMessageSound();

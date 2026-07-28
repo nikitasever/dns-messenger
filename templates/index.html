@@ -41,6 +41,7 @@
             <div class="search-box">
                 <input type="text" id="search-input" placeholder="Поиск" autocomplete="off">
             </div>
+            <button class="menu-btn split-view-btn" id="split-view-btn" onclick="toggleSplitView()" title="Второй чат рядом">&#x25EB;</button>
         </div>
 
         <!-- Tabs -->
@@ -158,7 +159,8 @@
         </div>
     </div>
 
-    <!-- ── Chat area ───────────────────────────────────────────── -->
+    <!-- ── Chat area(s) ────────────────────────────────────────── -->
+    <div class="chat-area-split" id="chat-area-split">
     <main class="chat-area">
         <div class="chat-header" id="chat-header" style="display:none"></div>
 
@@ -213,6 +215,32 @@
             <span>&#x1F4CE; Отпустите файл для отправки</span>
         </div>
     </main>
+
+    <!-- Second pane (split view, desktop only). Stage 1: independent chat
+         selection + virtualized read view + plain text send. Voice/video/
+         file/emoji/reactions-click/context-menu/reply/typing-indicator are
+         intentionally NOT duplicated yet - those still only work in the
+         pane above; this pane is read + basic text chat only for now. -->
+    <main class="chat-area chat-area-secondary" id="chat-area-b" style="display:none">
+        <div class="chat-header" id="chat-header-b" style="display:none"></div>
+        <div class="messages" id="messages-b" style="display:none"></div>
+        <button class="scroll-bottom-btn" id="scroll-bottom-btn-b" onclick="scrollMessagesToBottom(true, paneB)" style="display:none">
+            &#x2193;<span class="scroll-unread" id="scroll-unread-b" style="display:none">0</span>
+        </button>
+        <div class="no-chat" id="no-chat-b">
+            <div class="no-chat-content">
+                <div class="empty-icon">&#x1F310;</div>
+                <p>Выберите второй чат</p>
+            </div>
+        </div>
+        <div class="input-area" id="input-area-b" style="display:none">
+            <div class="input-wrap">
+                <textarea id="msg-input-b" placeholder="Сообщение" rows="1"></textarea>
+            </div>
+            <button class="send-btn" id="send-btn-b" title="Отправить">&#x27A4;</button>
+        </div>
+    </main>
+    </div>
 </div>
 
 <input type="file" id="file-input">

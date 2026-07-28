@@ -406,6 +406,20 @@ body {
     position: relative;
 }
 
+/* Split view: a second independent chat pane next to the first. Desktop
+   only - the .split-view-btn that opens it is hidden below the same
+   breakpoint the mobile media query already uses elsewhere. */
+.chat-area-split {
+    flex: 1;
+    display: flex;
+    min-width: 0;
+}
+.chat-area-split .chat-area { min-width: 0; }
+.chat-area-secondary { border-left: 1px solid var(--border); }
+@media (max-width: 1099px) {
+    .split-view-btn { display: none; }
+}
+
 /* Chat background pattern */
 .chat-area::before {
     content: '';
