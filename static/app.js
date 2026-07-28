@@ -1762,6 +1762,30 @@ function applySettings() {
 }
 applySettings();
 
+// ── Empty-state parallax ─────────────────────────────────────────────
+// Subtle pointer-follow on the "no chat selected" placeholder. Respects the
+// animations toggle and prefers-reduced-motion directly (unlike CSS
+// transitions, a JS-computed inline transform isn't stopped by --no-anim's
+// duration override, so it needs its own check).
+(function initEmptyStateParallax() {
+    const content = document.getElementById('no-chat-content');
+    if (!content) return;
+    const noChat = document.getElementById('no-chat');
+    const MAX_PX = 14;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    document.addEventListener('mousemove', (e) => {
+        if (document.documentElement.classList.contains('no-anim') || reduceMotion.matches) return;
+        if (!noChat || noChat.offsetParent === null) return;
+        const rect = noChat.getBoundingClientRect();
+        const relX = (e.clientX - (rect.left + rect.width / 2)) / (rect.width / 2);
+        const relY = (e.clientY - (rect.top + rect.height / 2)) / (rect.height / 2);
+        const px = Math.max(-1, Math.min(1, relX)) * MAX_PX;
+        const py = Math.max(-1, Math.min(1, relY)) * MAX_PX;
+        content.style.setProperty('--px', px.toFixed(1) + 'px');
+        content.style.setProperty('--py', py.toFixed(1) + 'px');
+    });
+})();
+
 function showSettings(initialSection) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay settings-overlay';

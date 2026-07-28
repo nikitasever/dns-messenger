@@ -657,14 +657,30 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-direction: column;
     z-index: 1;
     position: relative;
-    gap: 14px;
     padding: 40px;
 }
 
-.no-chat .empty-icon {
+/* Parallax wrapper: mousemove handler in app.js sets --px/--py (a few px,
+   capped) on #no-chat-content; icon drifts a bit further than the text so
+   the pointer reads as a light source rather than the layout literally
+   dragging. Guarded in JS behind no-anim/reduced-motion, but the
+   transition here is what makes the pointer-follow feel smooth instead of
+   snapping frame to frame. */
+.no-chat-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 14px;
+    --px: 0px;
+    --py: 0px;
+    transform: translate(var(--px), var(--py));
+    transition: transform 0.2s var(--ease-out);
+}
+
+.no-chat-content .empty-icon {
     width: 90px;
     height: 90px;
     background: linear-gradient(135deg, var(--accent), var(--accent-dark));
