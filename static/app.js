@@ -1570,46 +1570,49 @@ async function sendMessage() {
     }
 }
 
-async function sendFile() {
-    if (!state.currentChat) return;
-    if (state.currentChat.type === 'group') {
+async function sendFile(pane = paneA) {
+    if (!pane.currentChat) return;
+    if (pane.currentChat.type === 'group') {
         toast(t('call_only_dm'), 'info');
         return;
     }
-    $fileInput.click();
+    (pane === paneA ? $fileInput : $fileInputB).click();
 }
 
-$fileInput?.addEventListener('change', async () => {
-    const file = $fileInput.files[0];
-    if (!file || !state.currentChat) return;
+async function handleFilePicked(pane, fileInput) {
+    const file = fileInput.files[0];
+    if (!file || !pane.currentChat) return;
 
     if (file.size > 512 * 1024) {
         toast(t('file_max'), 'error');
-        $fileInput.value = '';
+        fileInput.value = '';
         return;
     }
 
     const ts = Date.now();
     const uploadId = 'up_' + ts;
-    addMessage(state.currentChat.id, { from: state.username, file: file.name, size: file.size, ts, uploading: true, uploadId, id: uploadId });
-    paneA.forceBottom = true;
-    renderMessages();
+    addMessage(pane.currentChat.id, { from: state.username, file: file.name, size: file.size, ts, uploading: true, uploadId, id: uploadId });
+    pane.forceBottom = true;
+    renderMessagesForPane(pane);
     renderChatList();
 
     const fd = new FormData();
-    fd.append('to', state.currentChat.id);
+    fd.append('to', pane.currentChat.id);
     fd.append('file', file);
 
     try {
         await uploadFileWithProgress('/api/file/send', fd, uploadId);
-        markUploadDone(uploadId, true);
+        markUploadDone(uploadId, true, pane);
         toast(t('file_sent'), 'success');
     } catch (e) {
-        markUploadDone(uploadId, false);
+        markUploadDone(uploadId, false, pane);
         toast((e && e.message) || t('file_send_err'), 'error');
     }
-    $fileInput.value = '';
-});
+    fileInput.value = '';
+}
+$fileInput?.addEventListener('change', () => handleFilePicked(paneA, $fileInput));
+const $fileInputB = document.getElementById('file-input-b');
+$fileInputB?.addEventListener('change', () => handleFilePicked(paneB || ensurePaneB(), $fileInputB));
 
 // Upload with progress via XHR; updates the progress bar on the placeholder message
 function uploadFileWithProgress(url, formData, uploadId) {
@@ -1635,15 +1638,15 @@ function uploadFileWithProgress(url, formData, uploadId) {
         xhr.send(formData);
     });
 }
-function markUploadDone(uploadId, ok) {
-    const chat = state.currentChat && state.chats[state.currentChat.id];
+function markUploadDone(uploadId, ok, pane = paneA) {
+    const chat = pane.currentChat && state.chats[pane.currentChat.id];
     if (!chat) return;
     const msg = chat.messages.find(m => m.id === uploadId);
     if (msg) {
         msg.uploading = false;
         if (!ok) msg.uploadFailed = true;
         saveState();
-        if (state.currentChat) renderMessages();
+        if (pane.currentChat) renderMessagesForPane(pane);
     }
 }
 
@@ -3195,6 +3198,11 @@ function renderSettingsData(root, overlay) {
 // Voice Messages (record audio, send as file via DNS tunnel)
 // ═══════════════════════════════════════════════════════════════════
 
+// Only one voice recording can be in flight at a time (one MediaRecorder,
+// one mic) - same rationale as calls staying singular in split view.
+// voiceState.pane tracks which pane's chat it's recording for and which
+// pane's input area shows the indicator; pressing the mic button in
+// either pane targets that pane.
 let voiceState = {
     recording: false,
     mediaRecorder: null,
@@ -3202,20 +3210,23 @@ let voiceState = {
     stream: null,
     startTime: null,
     timerInterval: null,
+    pane: null,
 };
 
 const $voiceBtn = document.getElementById('voice-rec-btn');
+const $voiceBtnB = document.getElementById('voice-rec-btn-b');
+function voiceBtnFor(pane) { return pane === paneA ? $voiceBtn : $voiceBtnB; }
 
-async function toggleVoiceRecord() {
+async function toggleVoiceRecord(pane = paneA) {
     if (voiceState.recording) {
         stopVoiceRecord();
     } else {
-        startVoiceRecord();
+        startVoiceRecord(pane);
     }
 }
 
-async function startVoiceRecord() {
-    if (!state.currentChat || state.currentChat.type !== 'dm') {
+async function startVoiceRecord(pane = paneA) {
+    if (!pane.currentChat || pane.currentChat.type !== 'dm') {
         toast('Voice messages are only available in direct chats', 'info');
         return;
     }
@@ -3224,6 +3235,7 @@ async function startVoiceRecord() {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         voiceState.stream = stream;
         voiceState.chunks = [];
+        voiceState.pane = pane;
 
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
             ? 'audio/webm;codecs=opus'
@@ -3239,7 +3251,7 @@ async function startVoiceRecord() {
         recorder.onstop = () => {
             const blob = new Blob(voiceState.chunks, { type: mimeType });
             const duration = Math.round((Date.now() - voiceState.startTime) / 1000);
-            sendVoiceMessage(blob, duration);
+            sendVoiceMessage(blob, duration, voiceState.pane);
             voiceState.stream.getTracks().forEach(t => t.stop());
             voiceState.stream = null;
         };
@@ -3247,10 +3259,10 @@ async function startVoiceRecord() {
         recorder.start(100);
         voiceState.recording = true;
         voiceState.startTime = Date.now();
-        $voiceBtn.classList.add('recording');
+        voiceBtnFor(pane)?.classList.add('recording');
 
         // Show recording indicator in input area
-        showRecordingIndicator();
+        showRecordingIndicator(pane);
 
     } catch (e) {
         showMediaError('voice messages');
@@ -3260,8 +3272,8 @@ async function startVoiceRecord() {
 function stopVoiceRecord(cancel) {
     if (!voiceState.recording) return;
     voiceState.recording = false;
-    $voiceBtn.classList.remove('recording');
-    hideRecordingIndicator();
+    voiceBtnFor(voiceState.pane)?.classList.remove('recording');
+    hideRecordingIndicator(voiceState.pane);
 
     if (cancel) {
         voiceState.mediaRecorder.stop();
@@ -3276,10 +3288,10 @@ function stopVoiceRecord(cancel) {
     }
 }
 
-function showRecordingIndicator() {
-    const $wrap = document.querySelector('.input-wrap');
-    const $textarea = document.getElementById('msg-input');
-    const $attach = document.querySelector('.attach-btn');
+function showRecordingIndicator(pane = paneA) {
+    const $wrap = pane.$inputArea.querySelector('.input-wrap');
+    const $textarea = pane.$msgInput;
+    const $attach = pane.$inputArea.querySelector('.attach-btn');
     if ($textarea) $textarea.style.display = 'none';
     if ($attach) $attach.style.display = 'none';
 
@@ -3302,15 +3314,15 @@ function showRecordingIndicator() {
     }, 500);
 }
 
-function hideRecordingIndicator() {
+function hideRecordingIndicator(pane = paneA) {
     if (voiceState.timerInterval) {
         clearInterval(voiceState.timerInterval);
         voiceState.timerInterval = null;
     }
     const indicator = document.getElementById('rec-indicator');
     if (indicator) indicator.remove();
-    const $textarea = document.getElementById('msg-input');
-    const $attach = document.querySelector('.attach-btn');
+    const $textarea = pane.$msgInput;
+    const $attach = pane.$inputArea.querySelector('.attach-btn');
     if ($textarea) $textarea.style.display = '';
     if ($attach) $attach.style.display = '';
 }
@@ -3382,8 +3394,8 @@ async function playVoice(btn) {
     }
 }
 
-async function sendVoiceMessage(blob, duration) {
-    if (!state.currentChat) return;
+async function sendVoiceMessage(blob, duration, pane = paneA) {
+    if (!pane.currentChat) return;
     if (blob.size > 512 * 1024) {
         toast(t('voice_too_large'), 'error');
         return;
@@ -3391,7 +3403,7 @@ async function sendVoiceMessage(blob, duration) {
 
     const ts = Date.now();
     const filename = `voice_${ts}.webm`;
-    addMessage(state.currentChat.id, {
+    addMessage(pane.currentChat.id, {
         from: state.username,
         voice: true,
         file: filename,
@@ -3399,11 +3411,12 @@ async function sendVoiceMessage(blob, duration) {
         duration: duration,
         ts,
     });
-    renderMessages();
+    pane.forceBottom = true;
+    renderMessagesForPane(pane);
     renderChatList();
 
     const fd = new FormData();
-    fd.append('to', state.currentChat.id);
+    fd.append('to', pane.currentChat.id);
     fd.append('file', blob, filename);
 
     try {
@@ -3420,17 +3433,19 @@ async function sendVoiceMessage(blob, duration) {
 // ═══════════════════════════════════════════════════════════════════
 const videoState = {
     recording: false, mediaRecorder: null, chunks: [], stream: null,
-    startTime: null, timerInterval: null, previewEl: null,
+    startTime: null, timerInterval: null, previewEl: null, pane: null,
 };
 const $videoBtn = document.getElementById('video-rec-btn');
+const $videoBtnB = document.getElementById('video-rec-btn-b');
+function videoBtnFor(pane) { return pane === paneA ? $videoBtn : $videoBtnB; }
 
-async function toggleVideoRecord() {
+async function toggleVideoRecord(pane = paneA) {
     if (videoState.recording) stopVideoRecord();
-    else startVideoRecord();
+    else startVideoRecord(pane);
 }
 
-async function startVideoRecord() {
-    if (!state.currentChat || state.currentChat.type !== 'dm') {
+async function startVideoRecord(pane = paneA) {
+    if (!pane.currentChat || pane.currentChat.type !== 'dm') {
         toast(t('voice_dm_only') || 'Только в личных чатах', 'info');
         return;
     }
@@ -3441,6 +3456,7 @@ async function startVideoRecord() {
         });
         videoState.stream = stream;
         videoState.chunks = [];
+        videoState.pane = pane;
 
         const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
             ? 'video/webm;codecs=vp9,opus'
@@ -3453,7 +3469,7 @@ async function startVideoRecord() {
         recorder.onstop = () => {
             const blob = new Blob(videoState.chunks, { type: 'video/webm' });
             const duration = Math.round((Date.now() - videoState.startTime) / 1000);
-            sendVideoMessage(blob, duration);
+            sendVideoMessage(blob, duration, videoState.pane);
             videoState.stream?.getTracks().forEach(t => t.stop());
             videoState.stream = null;
             hideVideoPreview();
@@ -3462,7 +3478,7 @@ async function startVideoRecord() {
         recorder.start(100);
         videoState.recording = true;
         videoState.startTime = Date.now();
-        $videoBtn?.classList.add('recording');
+        videoBtnFor(pane)?.classList.add('recording');
         showVideoPreview(stream);
 
         // Auto-stop at 60s
@@ -3475,7 +3491,7 @@ async function startVideoRecord() {
 function stopVideoRecord(cancel) {
     if (!videoState.recording) return;
     videoState.recording = false;
-    $videoBtn?.classList.remove('recording');
+    videoBtnFor(videoState.pane)?.classList.remove('recording');
     if (cancel) {
         try { videoState.mediaRecorder.stop(); } catch(e) {}
         videoState.chunks = [];
@@ -3515,19 +3531,20 @@ function hideVideoPreview() {
     if (videoState.previewEl) { videoState.previewEl.remove(); videoState.previewEl = null; }
 }
 
-async function sendVideoMessage(blob, duration) {
-    if (!state.currentChat) return;
+async function sendVideoMessage(blob, duration, pane = paneA) {
+    if (!pane.currentChat) return;
     if (blob.size > 4 * 1024 * 1024) { toast('Видео слишком большое (макс 4 МБ)', 'error'); return; }
     const ts = Date.now();
     const filename = `videomsg_${ts}.webm`;
-    addMessage(state.currentChat.id, {
+    addMessage(pane.currentChat.id, {
         from: state.username, videoMsg: true, file: filename,
         size: blob.size, duration, ts,
     });
-    renderMessages();
+    pane.forceBottom = true;
+    renderMessagesForPane(pane);
     renderChatList();
     const fd = new FormData();
-    fd.append('to', state.currentChat.id);
+    fd.append('to', pane.currentChat.id);
     fd.append('file', blob, filename);
     try {
         const res = await fetch('/api/file/send', { method: 'POST', body: fd }).then(r => r.json());

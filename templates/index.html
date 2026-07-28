@@ -216,11 +216,9 @@
         </div>
     </main>
 
-    <!-- Second pane (split view, desktop only). Stage 1: independent chat
-         selection + virtualized read view + plain text send. Voice/video/
-         file/emoji/reactions-click/context-menu/reply/typing-indicator are
+    <!-- Second pane (split view, desktop only). Emoji/typing-indicator are
          intentionally NOT duplicated yet - those still only work in the
-         pane above; this pane is read + basic text chat only for now. -->
+         pane above. -->
     <main class="chat-area chat-area-secondary" id="chat-area-b" style="display:none">
         <div class="chat-header" id="chat-header-b" style="display:none"></div>
         <div class="chat-search-bar" id="chat-search-bar-b" style="display:none">
@@ -242,7 +240,10 @@
         </div>
         <div class="input-area" id="input-area-b" style="display:none">
             <div class="input-wrap">
+                <button class="voice-rec-btn" id="voice-rec-btn-b" onclick="toggleVoiceRecord(paneB)" title="Голосовое сообщение">&#x1F3A4;</button>
+                <button class="voice-rec-btn" id="video-rec-btn-b" onclick="toggleVideoRecord(paneB)" title="Видеосообщение">&#x1F3A5;</button>
                 <textarea id="msg-input-b" placeholder="Сообщение" rows="1"></textarea>
+                <button class="attach-btn" onclick="sendFile(paneB)" title="Прикрепить файл">&#x1F4CE;</button>
             </div>
             <button class="send-btn" id="send-btn-b" title="Отправить">&#x27A4;</button>
         </div>
@@ -251,6 +252,7 @@
 </div>
 
 <input type="file" id="file-input">
+<input type="file" id="file-input-b">
 
 <!-- Remote audio element — always present so voice calls play audio even when video is hidden -->
 <audio id="remote-audio" autoplay playsinline></audio>

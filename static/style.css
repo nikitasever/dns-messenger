@@ -2100,10 +2100,10 @@ button:active, .btn:active { transform: scale(0.94); }
 .badge:not([style*="display:none"]) { animation: bounceIn 0.35s ease; }
 
 /* Search input focus glow */
-#search-input, #msg-input {
+#search-input, #msg-input, #msg-input-b {
     transition: background 0.2s ease, box-shadow 0.2s ease;
 }
-#search-input:focus, #msg-input:focus {
+#search-input:focus, #msg-input:focus, #msg-input-b:focus {
     box-shadow: 0 0 0 2px rgba(0, 168, 132, 0.35);
 }
 
@@ -2290,7 +2290,7 @@ input[type="text"]:focus, input[type="password"]:focus {
 .video-rec-preview .video-rec-cancel:hover,
 .video-rec-preview .video-rec-stop:hover { transform: scale(1.1); }
 
-#video-rec-btn.recording { background: var(--red) !important; color: #fff !important; }
+#video-rec-btn.recording, #video-rec-btn-b.recording { background: var(--red) !important; color: #fff !important; }
 
 /* ═══════════════════════════════════════════════════════════════════
    Viewport fix — prevent right/bottom edge clipping
