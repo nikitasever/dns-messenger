@@ -1207,27 +1207,37 @@ body {
 @media (max-width: 900px) {
     .app {
         position: relative;
+        overflow: hidden;
     }
 
+    /* List <-> chat is real navigation between two screens on mobile, so it
+       slides like one: both panels stay laid out (transform, not
+       display:none) and transition together. html.no-anim/reduced-motion
+       already zero out transition-duration globally, so this degrades to
+       an instant swap exactly like the old display-toggle did. */
     .sidebar {
         width: 100%;
         min-width: 0;
         position: absolute;
         inset: 0;
         z-index: 10;
+        transform: translateX(0);
+        transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2);
     }
 
     .chat-area {
         width: 100%;
         position: absolute;
         inset: 0;
-        z-index: 5;
-        display: none;
+        z-index: 11;
+        display: flex;
+        transform: translateX(100%);
+        transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2);
     }
 
     /* When a chat is open on mobile */
-    body.chat-open .sidebar { display: none; }
-    body.chat-open .chat-area { display: flex; }
+    body.chat-open .sidebar { transform: translateX(-100%); }
+    body.chat-open .chat-area { transform: translateX(0); }
 
     .mobile-back { display: flex; }
 
@@ -2655,8 +2665,10 @@ html[data-list-wallpaper="snow"] #chat-list {
     border-radius: 8px;
 }
 
-/* Scroll-to-bottom button */
-.chat-area { position: relative; }
+/* Scroll-to-bottom button (positioning context already set by the base
+   .chat-area rule; redeclaring position:relative here used to silently
+   clobber the mobile media query's position:absolute since it came later
+   in the cascade — that's what broke the slide transition below). */
 .scroll-bottom-btn {
     position: absolute;
     right: 20px;
