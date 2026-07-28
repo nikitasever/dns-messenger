@@ -410,6 +410,7 @@ const paneA = {
     scrollRenderQueued: false,
     forceBottom: false,
     replyingTo: null,
+    searchMatches: [], searchIdx: -1,
 };
 let paneB = null;
 function ensurePaneB() {
@@ -430,6 +431,7 @@ function ensurePaneB() {
         scrollRenderQueued: false,
         forceBottom: false,
         replyingTo: null,
+        searchMatches: [], searchIdx: -1,
     };
     paneB.$sendBtn.addEventListener('click', () => sendMessageInPane(paneB));
     paneB.$msgInput.addEventListener('keydown', (e) => {
@@ -447,6 +449,11 @@ function ensurePaneB() {
             renderWindowAt(paneB, paneB.$messages.scrollTop, false);
             updateScrollBtn(paneB);
         });
+    });
+    document.getElementById('chat-search-input-b')?.addEventListener('input', () => runChatSearch(paneB));
+    document.getElementById('chat-search-input-b')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); chatSearchStep(e.shiftKey ? -1 : 1, paneB); }
+        if (e.key === 'Escape') closeChatSearch(paneB);
     });
     return paneB;
 }
@@ -695,8 +702,8 @@ function selectChatInPane(pane, id) {
     renderMessagesForPane(pane);
 }
 
-// Minimal header for the second pane - Stage 1 doesn't duplicate calls,
-// in-chat search, or group member management there yet.
+// Minimal header for the second pane - Stage 1 doesn't duplicate calls
+// or group member management there yet.
 function renderHeaderB() {
     if (!paneB || !paneB.currentChat) return;
     const chat = state.chats[paneB.currentChat.id];
@@ -708,6 +715,7 @@ function renderHeaderB() {
             <div class="chat-title">${esc(chat.name)}</div>
         </div>
         <div class="header-actions">
+            <button onclick="openChatSearch(paneB)" title="Поиск по чату">&#x1F50D;</button>
             <button onclick="closePaneB()" title="Закрыть">&times;</button>
         </div>
     `;
@@ -1111,12 +1119,11 @@ function buildRowNode(row, pane) {
 // per-row from the windowed renderer instead of once per message in the
 // full history.
 //
-// Split view stage 1: the second pane only gets the read view + reaction
-// *display* - context menu, swipe-to-reply/pin, and search highlighting
-// are pane-A-only for now (they're wired through singular globals like
-// ctxTargetMsg/chatSearchMatches that don't know which pane triggered
-// them), so they're skipped here rather than attached and silently acting
-// on the wrong pane.
+// Reactions, context menu, swipe-to-reply, and search highlighting are all
+// pane-aware (via ctxTargetPane / pane.searchMatches / pane.replyingTo).
+// Reply-quote-click and Edit still only make sense in pane A: quoting jumps
+// via paneA.pendingScrollTarget, and Edit needs a flow that isn't built for
+// pane B yet.
 function buildMessageNode(msg, isNew, isGroup, pane) {
     const isMine = msg.from === state.username;
     const div = document.createElement('div');
@@ -1262,16 +1269,16 @@ function buildMessageNode(msg, isNew, isGroup, pane) {
         // since the composer bar they need only exists in pane A so far.
         div.addEventListener('contextmenu', (e) => { e.preventDefault(); showContextMenu(e, msg, pane); });
 
-        if (pane === paneA) {
-            // Search/pinned highlight - data-driven off chatSearchMatches/pinnedId
-            // rather than a post-render DOM query, so it stays correct however the
-            // virtualized window happens to be sliced (a match scrolled out of the
-            // DOM still gets highlighted the moment it scrolls back into the window).
-            if (msg.id && chatSearchMatches.includes(msg.id)) {
-                div.classList.add('search-hit');
-                if (msg.id === chatSearchMatches[chatSearchIdx]) div.classList.add('search-current');
-            }
+        // Search highlight - data-driven off this pane's own searchMatches
+        // rather than a post-render DOM query, so it stays correct however the
+        // virtualized window happens to be sliced (a match scrolled out of the
+        // DOM still gets highlighted the moment it scrolls back into the window).
+        if (msg.id && pane.searchMatches.includes(msg.id)) {
+            div.classList.add('search-hit');
+            if (msg.id === pane.searchMatches[pane.searchIdx]) div.classList.add('search-current');
+        }
 
+        if (pane === paneA) {
             // Reply-quote click: attached here (not inline onclick) so replyQName/
             // replyQText travel as real JS values, never serialized into an attribute
             // that gets parsed as code.
@@ -4085,64 +4092,67 @@ function scrollToPinned() {
 }
 
 // ── In-chat message search ──────────────────────────────────────────
-let chatSearchMatches = [];
-let chatSearchIdx = -1;
+// Search state lives on each pane (pane.searchMatches/searchIdx) so pane A
+// and pane B can each search their own (independent) open chat.
+function barId(pane) { return pane === paneA ? 'chat-search-bar' : 'chat-search-bar-b'; }
+function inputId(pane) { return pane === paneA ? 'chat-search-input' : 'chat-search-input-b'; }
+function countId(pane) { return pane === paneA ? 'chat-search-count' : 'chat-search-count-b'; }
 
-function openChatSearch() {
-    const bar = document.getElementById('chat-search-bar');
+function openChatSearch(pane = paneA) {
+    const bar = document.getElementById(barId(pane));
     if (!bar) return;
     bar.style.display = 'flex';
-    const inp = document.getElementById('chat-search-input');
+    const inp = document.getElementById(inputId(pane));
     inp.value = '';
     inp.focus();
-    chatSearchMatches = [];
-    chatSearchIdx = -1;
-    updateChatSearchCount();
+    pane.searchMatches = [];
+    pane.searchIdx = -1;
+    updateChatSearchCount(pane);
 }
-function closeChatSearch() {
-    const bar = document.getElementById('chat-search-bar');
+function closeChatSearch(pane = paneA) {
+    const bar = document.getElementById(barId(pane));
     if (bar) bar.style.display = 'none';
-    chatSearchMatches = [];
-    chatSearchIdx = -1;
-    renderMessages();
+    pane.searchMatches = [];
+    pane.searchIdx = -1;
+    renderMessagesForPane(pane);
 }
-function runChatSearch() {
-    const q = (document.getElementById('chat-search-input')?.value || '').trim().toLowerCase();
-    const chat = state.currentChat && state.chats[state.currentChat.id];
-    chatSearchMatches = [];
-    chatSearchIdx = -1;
+function runChatSearch(pane = paneA) {
+    const q = (document.getElementById(inputId(pane))?.value || '').trim().toLowerCase();
+    const chat = pane.currentChat && state.chats[pane.currentChat.id];
+    pane.searchMatches = [];
+    pane.searchIdx = -1;
     if (q && chat) {
         for (const m of chat.messages) {
             if (m.deleted) continue;
-            if (bodyOf(m).toLowerCase().includes(q)) chatSearchMatches.push(m.id);
+            if (bodyOf(m).toLowerCase().includes(q)) pane.searchMatches.push(m.id);
         }
     }
     // search-hit/search-current are applied data-driven inside
-    // buildMessageNode() off chatSearchMatches/chatSearchIdx, so any render
+    // buildMessageNode() off pane.searchMatches/searchIdx, so any render
     // (including the jump focusSearchMatch() below triggers) picks up
     // whatever's current here - no separate DOM-highlighting pass needed,
     // which also means it stays correct for matches outside the virtualized
     // window instead of silently skipping them.
-    if (chatSearchMatches.length) { chatSearchIdx = 0; focusSearchMatch(); }
-    else renderMessages();
-    updateChatSearchCount();
+    if (pane.searchMatches.length) { pane.searchIdx = 0; focusSearchMatch(pane); }
+    else renderMessagesForPane(pane);
+    updateChatSearchCount(pane);
 }
-function chatSearchStep(dir) {
-    if (!chatSearchMatches.length) return;
-    chatSearchIdx = (chatSearchIdx + dir + chatSearchMatches.length) % chatSearchMatches.length;
-    focusSearchMatch();
-    updateChatSearchCount();
+function chatSearchStep(dir, pane = paneA) {
+    if (!pane.searchMatches.length) return;
+    pane.searchIdx = (pane.searchIdx + dir + pane.searchMatches.length) % pane.searchMatches.length;
+    focusSearchMatch(pane);
+    updateChatSearchCount(pane);
 }
-function focusSearchMatch() {
-    const id = chatSearchMatches[chatSearchIdx];
+function focusSearchMatch(pane = paneA) {
+    const id = pane.searchMatches[pane.searchIdx];
     if (id == null) return;
-    paneA.pendingScrollTarget = { id };
-    renderMessages();
+    pane.pendingScrollTarget = { id };
+    renderMessagesForPane(pane);
 }
-function updateChatSearchCount() {
-    const el = document.getElementById('chat-search-count');
+function updateChatSearchCount(pane = paneA) {
+    const el = document.getElementById(countId(pane));
     if (!el) return;
-    el.textContent = chatSearchMatches.length ? `${chatSearchIdx + 1}/${chatSearchMatches.length}` : '0/0';
+    el.textContent = pane.searchMatches.length ? `${pane.searchIdx + 1}/${pane.searchMatches.length}` : '0/0';
 }
 
 // ── Scroll-to-bottom button ─────────────────────────────────────────
