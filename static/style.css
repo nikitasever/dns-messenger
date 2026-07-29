@@ -2835,13 +2835,16 @@ html[data-list-wallpaper="snow"] #chat-list {
     outline: none;
 }
 .chat-search-bar input:focus { border-color: var(--accent); }
-.chat-search-count { font-size: 13px; color: var(--text-muted); min-width: 42px; text-align: center; }
+.chat-search-count { font-size: 13px; color: var(--text-muted); min-width: 42px; text-align: center; transition: color 0.15s ease; }
+.chat-search-count.no-results { color: var(--red); }
 .chat-search-nav, .chat-search-close {
     background: transparent; border: none; color: var(--text-muted);
     cursor: pointer; padding: 6px 8px; border-radius: 8px; font-size: 15px;
     transition: background 0.15s ease, color 0.15s ease;
 }
 .chat-search-nav:hover, .chat-search-close:hover { background: rgba(127,127,127,0.15); color: var(--text); }
+.chat-search-nav:disabled { opacity: 0.35; cursor: default; }
+.chat-search-nav:disabled:hover { background: transparent; color: var(--text-muted); }
 .chat-search-close { font-size: 20px; }
 
 /* Search hit highlighting */

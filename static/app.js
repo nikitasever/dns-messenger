@@ -4365,7 +4365,14 @@ function focusSearchMatch(pane = paneA) {
 function updateChatSearchCount(pane = paneA) {
     const el = document.getElementById(countId(pane));
     if (!el) return;
-    el.textContent = pane.searchMatches.length ? `${pane.searchIdx + 1}/${pane.searchMatches.length}` : '0/0';
+    const hasMatches = pane.searchMatches.length > 0;
+    el.textContent = hasMatches ? `${pane.searchIdx + 1}/${pane.searchMatches.length}` : '0/0';
+    const q = (document.getElementById(inputId(pane))?.value || '').trim();
+    const noResults = !!q && !hasMatches;
+    el.classList.toggle('no-results', noResults);
+    document.getElementById(barId(pane))?.querySelectorAll('.chat-search-nav').forEach(btn => {
+        btn.disabled = noResults;
+    });
 }
 
 // ── Scroll-to-bottom button ─────────────────────────────────────────
