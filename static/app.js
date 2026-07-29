@@ -4848,8 +4848,11 @@ async function showGroupMembers() {
             <h3>Участники группы</h3>
             <div class="member-list" style="text-align:left;margin:12px 0;max-height:300px;overflow-y:auto">
                 ${members.map(u => `
-                    <div class="member-row" style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
-                        <span>${esc(u)}${u === state.username ? ' (вы)' : ''}</span>
+                    <div class="member-row">
+                        <div class="member-row-info">
+                            ${avatarHtml(u, false, 'sm')}
+                            <span>${esc(u)}${u === state.username ? ' (вы)' : ''}</span>
+                        </div>
                         ${u !== state.username ? `<button class="btn btn-secondary" data-kick="${esc(u)}" style="padding:4px 10px;font-size:12px">Исключить</button>` : ''}
                     </div>
                 `).join('')}
@@ -4864,6 +4867,7 @@ async function showGroupMembers() {
     overlay.querySelectorAll('[data-kick]').forEach(btn => {
         btn.addEventListener('click', async () => {
             const target = btn.dataset.kick;
+            if (!await confirmModal(`Исключить ${target} из группы?`, { danger: true })) return;
             btn.disabled = true;
             try {
                 const res = await fetch('/api/groups/kick', {

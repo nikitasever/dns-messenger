@@ -2026,6 +2026,27 @@ body {
 .chat-item:nth-child(8)  { animation-delay: 0.23s; }
 .chat-item:nth-child(n+9){ animation-delay: 0.26s; }
 
+/* Group member rows — same stagger pattern as the chat list */
+.member-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border);
+    border-radius: 8px; animation: slideInLeft 0.28s ease both;
+    transition: background 0.15s ease;
+}
+.member-row:last-child { border-bottom: none; }
+.member-row:hover { background: var(--bg-hover); }
+.member-row-info { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.member-row-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-row:nth-child(1) { animation-delay: 0.02s; }
+.member-row:nth-child(2) { animation-delay: 0.05s; }
+.member-row:nth-child(3) { animation-delay: 0.08s; }
+.member-row:nth-child(4) { animation-delay: 0.11s; }
+.member-row:nth-child(5) { animation-delay: 0.14s; }
+.member-row:nth-child(6) { animation-delay: 0.17s; }
+.member-row:nth-child(7) { animation-delay: 0.20s; }
+.member-row:nth-child(8) { animation-delay: 0.23s; }
+.member-row:nth-child(n+9) { animation-delay: 0.26s; }
+
 /* Tabs underline transition */
 .tab { transition: color 0.2s ease, transform 0.15s ease; }
 .tab:hover { transform: translateY(-1px); }
