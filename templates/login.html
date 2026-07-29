@@ -106,6 +106,14 @@
         .btn-login:hover { background: var(--accent-light); }
         .btn-login:active { transform: scale(0.98); }
         .btn-login:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        /* Same visual language as the main app's .send-btn spinner: white
+           ring, since the button's own background is the accent color. */
+        .btn-login .spinner {
+            display: inline-block; width: 14px; height: 14px; margin-right: 8px;
+            vertical-align: -2px; border: 2px solid rgba(255,255,255,0.35);
+            border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
         .error-msg { color: var(--red); font-size: 13px; margin-top: 12px; display: none; }
 
@@ -436,6 +444,10 @@
             );
         }
 
+        function setBtnLoading(btn, text) {
+            btn.innerHTML = '<span class="spinner"></span>' + text;
+        }
+
         async function doLogin(e) {
             e.preventDefault();
             const d = T();
@@ -447,7 +459,7 @@
             if (!username) return;
             btn.disabled = true;
             const origText = btn.textContent;
-            btn.textContent = d.connecting;
+            setBtnLoading(btn, d.connecting);
             errEl.style.display = 'none';
 
             try {
@@ -460,7 +472,7 @@
                 if (res.ok && res.need_webauthn) {
                     // Пароль верен, но у аккаунта включён второй фактор —
                     // сессия ещё не выдана, нужно подтвердить passkey.
-                    btn.textContent = lang === 'ru' ? 'Подтвердите passkey…' : 'Confirm your passkey…';
+                    setBtnLoading(btn, lang === 'ru' ? 'Подтвердите passkey…' : 'Confirm your passkey…');
                     try {
                         await verifyPasskeyLogin();
                         window.location.href = '/';
@@ -519,7 +531,7 @@
             if (!code) return;
             submitBtn.disabled = true;
             const orig = submitBtn.textContent;
-            submitBtn.textContent = d.backup_checking;
+            setBtnLoading(submitBtn, d.backup_checking);
             try {
                 const res = await fetch('/api/webauthn/login/backup', {
                     method: 'POST',
@@ -560,7 +572,7 @@
             if (!username || !recoveryCode || newPassword.length < 8) return;
             submitBtn.disabled = true;
             const orig = submitBtn.textContent;
-            submitBtn.textContent = d.forgot_checking;
+            setBtnLoading(submitBtn, d.forgot_checking);
             try {
                 const res = await fetch('/api/recovery/reset', {
                     method: 'POST',
