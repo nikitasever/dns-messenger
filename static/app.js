@@ -2215,6 +2215,13 @@ function openGoLiveModal() {
     if (state.chats[gid]?.isLive) { joinLiveStream(gid); return; }
     if (streamState.role) { toast('Вы уже участвуете в трансляции', 'info'); return; }
 
+    // getDisplayMedia (screen capture) has no implementation in any mobile
+    // browser's web engine — not Android Chrome, not iOS Safari — it's a
+    // platform gap, not a permission a user can grant. Hiding the button
+    // there beats letting them hunt through OS settings for a permission
+    // that was never the problem.
+    const canShareScreen = typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
@@ -2224,13 +2231,13 @@ function openGoLiveModal() {
             <p style="color:var(--text-muted);font-size:13px;margin:8px 0 18px;line-height:1.5">Видео идёт напрямую зрителям вашей группы, минуя сервер мессенджера.</p>
             <div class="modal-actions" style="flex-direction:column;gap:8px">
                 <button class="btn btn-primary" id="stream-src-camera">&#x1F4F7; Камера</button>
-                <button class="btn btn-secondary" id="stream-src-screen">&#x1F5A5;&#xFE0F; Экран</button>
+                ${canShareScreen ? '<button class="btn btn-secondary" id="stream-src-screen">&#x1F5A5;&#xFE0F; Экран</button>' : ''}
             </div>
         </div>
     `;
     document.body.appendChild(overlay);
     overlay.querySelector('#stream-src-camera').onclick = () => { overlay.remove(); startLiveStream(gid, 'camera'); };
-    overlay.querySelector('#stream-src-screen').onclick = () => { overlay.remove(); startLiveStream(gid, 'screen'); };
+    overlay.querySelector('#stream-src-screen')?.addEventListener('click', () => { overlay.remove(); startLiveStream(gid, 'screen'); });
 }
 
 async function startLiveStream(gid, source) {
