@@ -2264,7 +2264,14 @@ async function startLiveStream(gid, source) {
 
 function endLiveStream() {
     if (streamState.role !== 'streamer') return;
-    socket.emit('stream-end', { gid: streamState.gid });
+    const gid = streamState.gid;
+    socket.emit('stream-end', { gid });
+    // The server's 'stream-ended' notice only goes to viewers (the streamer
+    // obviously already knows) — so unlike every other isLive/liveStreamer
+    // update in this file, this one can't wait for a round-tripped socket
+    // event and must flip local state itself, right here.
+    const chat = state.chats[gid];
+    if (chat) { chat.isLive = false; chat.liveStreamer = null; renderChatList(); renderHeader(); }
     teardownStream();
 }
 
