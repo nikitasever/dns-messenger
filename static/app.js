@@ -2614,6 +2614,18 @@ function showSettings(initialSection) {
         tabs.forEach(t => t.classList.toggle('active', t.dataset.section === id));
         content.innerHTML = buildSettingsSection(id);
         wireSettingsSection(id, content, overlay);
+        // Web Animations API, not a CSS class — content.innerHTML is replaced
+        // in place (same node), so a CSS animation on .settings-content would
+        // only ever play once and never retrigger on later tab switches.
+        if (!document.documentElement.classList.contains('no-anim') && content.animate) {
+            content.animate(
+                [
+                    { opacity: 0, transform: 'translateY(6px)' },
+                    { opacity: 1, transform: 'translateY(0)' },
+                ],
+                { duration: 220, easing: 'ease' }
+            );
+        }
     };
     tabs.forEach(t => t.addEventListener('click', () => renderSection(t.dataset.section)));
     renderSection(initialSection || 'general');
