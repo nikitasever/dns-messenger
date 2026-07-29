@@ -44,14 +44,17 @@ class UDPTransport(BaseTransport):
     def __init__(self, server_ip: str, server_port: int, domain: str):
         self.server = (server_ip, server_port)
         self.domain = domain
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.settimeout(5.0)
 
     def query(self, labels: list[str]) -> str:
+        # Свой сокет на каждый запрос: UserMessenger используется параллельно
+        # (фоновый поток long-poll + запросы из Flask), а recvfrom на общем сокете
+        # без корреляции id → ответ уезжает не тому потоку.
         pkt = _build_query(labels, self.domain)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(5.0)
         try:
-            self.sock.sendto(pkt, self.server)
-            data, _ = self.sock.recvfrom(EDNS_UDP_SIZE)
+            sock.sendto(pkt, self.server)
+            data, _ = sock.recvfrom(EDNS_UDP_SIZE)
             resp = DNSRecord.parse(data)
             for rr in resp.rr:
                 if rr.rtype == QTYPE.TXT:
@@ -60,6 +63,8 @@ class UDPTransport(BaseTransport):
             return 'ERR:timeout'
         except Exception as exc:
             return f'ERR:{exc}'
+        finally:
+            sock.close()
         return 'ERR:no_response'
 
 

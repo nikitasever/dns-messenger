@@ -17,6 +17,10 @@ echo "== Python transport (nonce + EDNS0) tests =="
 python tests/test_transport.py
 
 echo
+echo "== Python transport concurrent-query crosstalk test =="
+python tests/test_transport_concurrency.py
+
+echo
 echo "== Python Ed25519 auth tests =="
 python tests/test_crypto_auth.py
 
