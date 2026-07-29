@@ -312,6 +312,29 @@
     </div>
 </div>
 
+<!-- ── Live stream overlay: video (direct WebRTC P2P, never through the
+     server) + an ephemeral live-chat panel, shown to both the streamer
+     (local preview) and viewers (remote feed). ─────────────────────── -->
+<div class="stream-overlay" id="stream-overlay">
+    <div class="stream-main">
+        <video id="stream-video" autoplay playsinline></video>
+        <video id="stream-local-preview" autoplay playsinline muted style="display:none"></video>
+        <div class="stream-empty-state" id="stream-empty-state" style="display:none">Ожидание видео от стримера…</div>
+        <div class="stream-top-bar">
+            <span class="stream-live-pill">&#x1F534; LIVE</span>
+            <span class="stream-viewer-count" id="stream-viewer-count" title="Зрителей">0</span>
+            <button class="stream-close-btn" id="stream-close-btn" title="Закрыть">&times;</button>
+        </div>
+    </div>
+    <div class="stream-chat-panel">
+        <div class="stream-chat-messages" id="stream-chat-messages"></div>
+        <form class="stream-chat-form" id="stream-chat-form">
+            <input type="text" id="stream-chat-input" placeholder="Написать в чат…" autocomplete="off" maxlength="500">
+            <button type="submit" title="Отправить">&#x27A4;</button>
+        </form>
+    </div>
+</div>
+
 <!-- ── Message context menu ─────────────────────────────────────── -->
 <div class="msg-context-menu" id="msg-context-menu">
     <div class="ctx-reactions" id="ctx-reactions">

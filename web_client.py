@@ -1637,6 +1637,65 @@ def buffer_or_emit(event: str, data: dict, username: str):
         push_notify(username, event, data)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Live streams — WebRTC P2P mesh broadcast. Video/audio never touch this
+# server or the DNS tunnel (browsers connect directly to each other);
+# this dict only tracks *who* is live for *which* group and relays the
+# signaling handshake + an ephemeral chat, exactly like the existing
+# 1:1 call-offer/call-answer/ice-candidate relay below but fanned out to
+# a roster instead of a single target. One stream per group at a time.
+# ═══════════════════════════════════════════════════════════════════════
+
+live_streams_lock = threading.Lock()
+live_streams: dict[str, dict] = {}   # gid → {'streamer': username, 'viewers': set[str]}
+
+
+def _broadcast_viewer_count(gid: str):
+    with live_streams_lock:
+        stream = live_streams.get(gid)
+        if not stream:
+            return
+        streamer = stream['streamer']
+        viewers = list(stream['viewers'])
+    payload = {'gid': gid, 'count': len(viewers)}
+    socketio.emit('stream-viewer-count', payload, room=streamer)
+    for v in viewers:
+        socketio.emit('stream-viewer-count', payload, room=v)
+
+
+def _end_live_stream(gid: str):
+    with live_streams_lock:
+        stream = live_streams.pop(gid, None)
+    if not stream:
+        return
+    for viewer in stream['viewers']:
+        socketio.emit('stream-ended', {'gid': gid}, room=viewer)
+
+
+def _remove_stream_viewer(gid: str, username: str):
+    with live_streams_lock:
+        stream = live_streams.get(gid)
+        if not stream or username not in stream['viewers']:
+            return
+        stream['viewers'].discard(username)
+        streamer = stream['streamer']
+    socketio.emit('stream-viewer-left', {'gid': gid, 'viewer': username}, room=streamer)
+    _broadcast_viewer_count(gid)
+
+
+def _cleanup_live_stream_presence(username: str):
+    """Called once a user's last socket disconnects: end any stream they were
+    hosting (viewers get notified), and drop them from any stream they were
+    watching (streamer gets notified)."""
+    with live_streams_lock:
+        snapshot = list(live_streams.items())
+    for gid, stream in snapshot:
+        if stream['streamer'] == username:
+            _end_live_stream(gid)
+        elif username in stream['viewers']:
+            _remove_stream_viewer(gid, username)
+
+
 def flush_buffer(username: str):
     """Send all buffered messages to user."""
     with msg_buffer_lock:
@@ -2452,6 +2511,20 @@ def api_group_members():
     return jsonify({'ok': True, 'members': m.list_group_members(group)})
 
 
+@app.route('/api/streams/active')
+def api_streams_active():
+    """Currently-live streams, keyed by group id. Not membership-filtered —
+    the client only ever looks up gids it already knows locally (groups it's
+    a member of), and a bare gid+streamer name reveals nothing a member
+    wouldn't already learn from the 'stream-started' socket event."""
+    if not get_messenger():
+        return jsonify({'ok': False}), 401
+    with live_streams_lock:
+        streams = {gid: {'streamer': s['streamer'], 'viewers': len(s['viewers'])}
+                   for gid, s in live_streams.items()}
+    return jsonify({'ok': True, 'streams': streams})
+
+
 @app.route('/api/groups/leave', methods=['POST'])
 def api_group_leave():
     m = get_messenger()
@@ -2884,7 +2957,10 @@ def on_disconnect():
         with msg_buffer_lock:
             count = online_sockets.get(m.username, 1) - 1
             online_sockets[m.username] = max(0, count)
+            fully_offline = online_sockets[m.username] == 0
         update_last_seen(m.username)
+        if fully_offline:
+            _cleanup_live_stream_presence(m.username)
 
 
 # ── WebRTC Call Signaling ───────────────────────────────────────────
@@ -2974,7 +3050,7 @@ def on_typing(data):
     if is_group:
         # Group rooms are not maintained server-side; broadcast to group members
         try:
-            members = m.group_members(target) if hasattr(m, 'group_members') else []
+            members = m.list_group_members(target)
         except Exception:
             members = []
         for user in members:
@@ -2997,6 +3073,157 @@ def on_call_reject(data):
             'from': m.username,
             'reason': reason,
         }, room=target)
+
+
+# ── Live stream signaling ───────────────────────────────────────────
+# Same relay pattern as the calls above, fanned out to a roster: the
+# streamer opens one RTCPeerConnection per viewer (P2P mesh, no SFU), so
+# each of these events just carries an extra 'gid'/'to' pair through to
+# the right room. list_group_members() is a real signed query over the
+# DNS tunnel, so stream-start has that latency — acceptable for a
+# once-per-broadcast action, unlike per-keystroke typing.
+
+@socketio.on('stream-start')
+def on_stream_start(data):
+    m = get_messenger()
+    if not m:
+        return
+    gid = data.get('gid')
+    if not gid:
+        return
+    try:
+        members = m.list_group_members(gid)
+    except Exception:
+        members = []
+    if m.username not in members:
+        emit('stream-error', {'gid': gid, 'error': 'not_a_member'})
+        return
+    with live_streams_lock:
+        if gid in live_streams:
+            emit('stream-error', {'gid': gid, 'error': 'already_live'})
+            return
+        live_streams[gid] = {'streamer': m.username, 'viewers': set()}
+    emit('stream-start-ok', {'gid': gid})
+    for user in members:
+        if user and user != m.username:
+            socketio.emit('stream-started', {'gid': gid, 'from': m.username}, room=user)
+
+
+@socketio.on('stream-end')
+def on_stream_end(data):
+    m = get_messenger()
+    if not m:
+        return
+    gid = data.get('gid')
+    if not gid:
+        return
+    with live_streams_lock:
+        stream = live_streams.get(gid)
+        if not stream or stream['streamer'] != m.username:
+            return
+    _end_live_stream(gid)
+
+
+@socketio.on('stream-join')
+def on_stream_join(data):
+    m = get_messenger()
+    if not m:
+        return
+    gid = data.get('gid')
+    if not gid:
+        return
+    with live_streams_lock:
+        stream = live_streams.get(gid)
+        if not stream:
+            emit('stream-error', {'gid': gid, 'error': 'not_live'})
+            return
+        streamer = stream['streamer']
+        stream['viewers'].add(m.username)
+    emit('stream-join-ok', {'gid': gid, 'streamer': streamer})
+    socketio.emit('stream-viewer-joined', {'gid': gid, 'viewer': m.username}, room=streamer)
+    _broadcast_viewer_count(gid)
+
+
+@socketio.on('stream-leave')
+def on_stream_leave(data):
+    m = get_messenger()
+    if not m:
+        return
+    gid = data.get('gid')
+    if gid:
+        _remove_stream_viewer(gid, m.username)
+
+
+@socketio.on('stream-offer')
+def on_stream_offer(data):
+    """Streamer → one viewer."""
+    m = get_messenger()
+    if not m:
+        return
+    gid, target = data.get('gid'), data.get('to')
+    if not gid or not target:
+        return
+    with live_streams_lock:
+        stream = live_streams.get(gid)
+        valid = bool(stream) and stream['streamer'] == m.username and target in stream['viewers']
+    if valid:
+        socketio.emit('stream-offer', {'gid': gid, 'from': m.username, 'offer': data.get('offer')}, room=target)
+
+
+@socketio.on('stream-answer')
+def on_stream_answer(data):
+    """Viewer → streamer."""
+    m = get_messenger()
+    if not m:
+        return
+    gid, target = data.get('gid'), data.get('to')
+    if not gid or not target:
+        return
+    with live_streams_lock:
+        stream = live_streams.get(gid)
+        valid = bool(stream) and target == stream['streamer'] and m.username in stream['viewers']
+    if valid:
+        socketio.emit('stream-answer', {'gid': gid, 'from': m.username, 'answer': data.get('answer')}, room=target)
+
+
+@socketio.on('stream-ice')
+def on_stream_ice(data):
+    """Either direction between a streamer/viewer pair already on the roster."""
+    m = get_messenger()
+    if not m:
+        return
+    gid, target = data.get('gid'), data.get('to')
+    if not gid or not target:
+        return
+    with live_streams_lock:
+        stream = live_streams.get(gid)
+        valid = bool(stream) and (
+            (stream['streamer'] == m.username and target in stream['viewers']) or
+            (target == stream['streamer'] and m.username in stream['viewers'])
+        )
+    if valid:
+        socketio.emit('stream-ice', {'gid': gid, 'from': m.username, 'candidate': data.get('candidate')}, room=target)
+
+
+@socketio.on('stream-chat')
+def on_stream_chat(data):
+    """Ephemeral live-chat line — never persisted, doesn't touch the E2E
+    group-message pipe or the DNS tunnel."""
+    m = get_messenger()
+    if not m:
+        return
+    gid = data.get('gid')
+    text = (data.get('text') or '').strip()[:500]
+    if not gid or not text:
+        return
+    with live_streams_lock:
+        stream = live_streams.get(gid)
+        if not stream or (m.username != stream['streamer'] and m.username not in stream['viewers']):
+            return
+        recipients = [stream['streamer'], *stream['viewers']]
+    payload = {'gid': gid, 'from': m.username, 'text': text, 'ts': time.time()}
+    for user in recipients:
+        socketio.emit('stream-chat', payload, room=user)
 
 
 # ═══════════════════════════════════════════════════════════════════════

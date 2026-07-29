@@ -940,6 +940,7 @@ function renderChatList() {
             <div class="chat-info">
                 <div class="chat-name-row">
                     <span class="chat-name">${esc(chat.name)}</span>
+                    ${isGroup && chat.isLive ? '<span class="live-badge">LIVE</span>' : ''}
                 </div>
                 <div class="chat-preview">${previewSender ? `<span class="preview-sender">${esc(previewSender)}</span>` : ''}${esc(previewBody.slice(0, previewBudget))}</div>
             </div>
@@ -1056,7 +1057,8 @@ function renderChatList() {
 // ── Render: Header ──────────────────────────────────────────────────
 function renderHeader() {
     if (!state.currentChat) return;
-    const chat = state.chats[state.currentChat.id];
+    const gid = state.currentChat.id;
+    const chat = state.chats[gid];
     if (!chat) return;
     const isGroup = chat.type === 'group';
 
@@ -1085,6 +1087,9 @@ function renderHeader() {
             ${isGroup ? `
                 <button onclick="showGroupMembers()" title="Участники">&#x1F465;</button>
                 <button class="invite-btn" onclick="showInviteModal()">+ Участник</button>
+                ${chat.isLive
+                    ? `<button class="live-header-btn" onclick="joinLiveStream('${esc(gid)}')" title="${chat.liveStreamer === state.username ? 'Вы в эфире' : 'Смотреть трансляцию'}">&#x1F534; ${chat.liveStreamer === state.username ? 'В эфире' : 'Смотреть'}</button>`
+                    : `<button onclick="openGoLiveModal()" title="Начать трансляцию">&#x1F4E1;</button>`}
             ` : ''}
         </div>
     `;
@@ -2175,6 +2180,295 @@ socket.on('call-error', (data) => {
     toast(data.error || 'Ошибка звонка', 'error');
     cleanupCall();
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// Live streams — WebRTC P2P mesh broadcast (video/audio go directly
+// between browsers, never through the server or the DNS tunnel; only
+// start/stop/roster signaling and an ephemeral live-chat ride socket.io,
+// same relay pattern as the 1:1 calls above). The streamer holds one
+// RTCPeerConnection per viewer — no SFU, so this only scales to a
+// handful of viewers, by design (see ICE_SERVERS above for TURN/STUN).
+// ═══════════════════════════════════════════════════════════════════
+
+let streamState = {
+    role: null,            // 'streamer' | 'viewer' | null
+    gid: null,
+    localStream: null,     // streamer only
+    peers: {},              // streamer: {viewer: pc}; viewer: {streamer: pc} (one entry)
+    iceQueues: {},           // per-peer queued candidates until remote desc is set
+    remoteDescSet: {},
+};
+
+const $streamOverlay = document.getElementById('stream-overlay');
+const $streamVideo = document.getElementById('stream-video');
+const $streamLocalPreview = document.getElementById('stream-local-preview');
+const $streamEmptyState = document.getElementById('stream-empty-state');
+const $streamViewerCount = document.getElementById('stream-viewer-count');
+const $streamCloseBtn = document.getElementById('stream-close-btn');
+const $streamChatMessages = document.getElementById('stream-chat-messages');
+const $streamChatForm = document.getElementById('stream-chat-form');
+const $streamChatInput = document.getElementById('stream-chat-input');
+
+function openGoLiveModal() {
+    if (!state.currentChat || state.currentChat.type !== 'group') return;
+    const gid = state.currentChat.id;
+    if (state.chats[gid]?.isLive) { joinLiveStream(gid); return; }
+    if (streamState.role) { toast('Вы уже участвуете в трансляции', 'info'); return; }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    overlay.innerHTML = `
+        <div class="modal" style="max-width:360px;text-align:center">
+            <h3>Начать трансляцию</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin:8px 0 18px;line-height:1.5">Видео идёт напрямую зрителям вашей группы, минуя сервер мессенджера.</p>
+            <div class="modal-actions" style="flex-direction:column;gap:8px">
+                <button class="btn btn-primary" id="stream-src-camera">&#x1F4F7; Камера</button>
+                <button class="btn btn-secondary" id="stream-src-screen">&#x1F5A5;&#xFE0F; Экран</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#stream-src-camera').onclick = () => { overlay.remove(); startLiveStream(gid, 'camera'); };
+    overlay.querySelector('#stream-src-screen').onclick = () => { overlay.remove(); startLiveStream(gid, 'screen'); };
+}
+
+async function startLiveStream(gid, source) {
+    let stream;
+    try {
+        stream = source === 'screen'
+            ? await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+            : await navigator.mediaDevices.getUserMedia({
+                audio: true,
+                video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+            });
+    } catch (e) {
+        showMediaError('трансляции');
+        return;
+    }
+
+    streamState = { role: 'streamer', gid, localStream: stream, peers: {}, iceQueues: {}, remoteDescSet: {} };
+    // The browser's own "Stop sharing" control ends the track directly —
+    // that's the only way a screen-share stream can end besides our button.
+    stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+        if (streamState.role === 'streamer' && streamState.gid === gid) endLiveStream();
+    });
+
+    showStreamOverlay(true);
+    $streamLocalPreview.srcObject = stream;
+    $streamLocalPreview.style.display = 'block';
+    $streamVideo.style.display = 'none';
+
+    socket.emit('stream-start', { gid });
+}
+
+function endLiveStream() {
+    if (streamState.role !== 'streamer') return;
+    socket.emit('stream-end', { gid: streamState.gid });
+    teardownStream();
+}
+
+function joinLiveStream(gid) {
+    if (streamState.role) { toast('Вы уже участвуете в трансляции', 'info'); return; }
+    streamState = { role: 'viewer', gid, localStream: null, peers: {}, iceQueues: {}, remoteDescSet: {} };
+    showStreamOverlay(false);
+    $streamEmptyState.style.display = 'flex';
+    socket.emit('stream-join', { gid });
+}
+
+function leaveLiveStream() {
+    if (streamState.role !== 'viewer') return;
+    socket.emit('stream-leave', { gid: streamState.gid });
+    teardownStream();
+}
+
+function teardownStream() {
+    if (streamState.localStream) streamState.localStream.getTracks().forEach(t => t.stop());
+    Object.values(streamState.peers).forEach(pc => { try { pc.close(); } catch(e) {} });
+    $streamOverlay.classList.remove('show');
+    $streamVideo.srcObject = null;
+    $streamLocalPreview.srcObject = null;
+    $streamLocalPreview.style.display = 'none';
+    $streamVideo.style.display = 'block';
+    $streamEmptyState.style.display = 'none';
+    streamState = { role: null, gid: null, localStream: null, peers: {}, iceQueues: {}, remoteDescSet: {} };
+}
+
+function showStreamOverlay(isStreamer) {
+    $streamChatMessages.innerHTML = '';
+    $streamViewerCount.textContent = '0';
+    $streamCloseBtn.title = isStreamer ? 'Завершить трансляцию' : 'Покинуть трансляцию';
+    $streamCloseBtn.onclick = () => { isStreamer ? endLiveStream() : leaveLiveStream(); };
+    $streamOverlay.classList.add('show');
+}
+
+function createStreamPeer(otherUser, isInitiator) {
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    streamState.peers[otherUser] = pc;
+    streamState.iceQueues[otherUser] = [];
+    streamState.remoteDescSet[otherUser] = false;
+
+    pc.onicecandidate = (e) => {
+        if (e.candidate) socket.emit('stream-ice', { gid: streamState.gid, to: otherUser, candidate: e.candidate });
+    };
+
+    if (isInitiator) {
+        // Streamer side: send-only, one connection per viewer.
+        if (streamState.localStream) {
+            streamState.localStream.getTracks().forEach(t => pc.addTrack(t, streamState.localStream));
+        }
+    } else {
+        // Viewer side: receive-only, from the streamer.
+        pc.ontrack = (e) => {
+            $streamVideo.srcObject = e.streams[0];
+            $streamEmptyState.style.display = 'none';
+        };
+    }
+    return pc;
+}
+
+async function setStreamRemoteDescription(otherUser, pc, desc) {
+    await pc.setRemoteDescription(desc);
+    streamState.remoteDescSet[otherUser] = true;
+    const queue = streamState.iceQueues[otherUser] || [];
+    streamState.iceQueues[otherUser] = [];
+    for (const c of queue) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)); }
+        catch (e) { console.error('Queued stream ICE add failed:', e); }
+    }
+}
+
+function cleanupStreamPeer(username) {
+    const pc = streamState.peers[username];
+    if (pc) { try { pc.close(); } catch(e) {} }
+    delete streamState.peers[username];
+    delete streamState.iceQueues[username];
+    delete streamState.remoteDescSet[username];
+}
+
+function renderStreamChatLine(from, text) {
+    const div = document.createElement('div');
+    div.className = 'stream-chat-line';
+    div.innerHTML = `<span class="stream-chat-from">${esc(from)}</span>${esc(text)}`;
+    $streamChatMessages.appendChild(div);
+    $streamChatMessages.scrollTop = $streamChatMessages.scrollHeight;
+}
+
+$streamChatForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = $streamChatInput.value.trim();
+    if (!text || !streamState.gid) return;
+    socket.emit('stream-chat', { gid: streamState.gid, text });
+    $streamChatInput.value = '';
+});
+
+// ── Live stream signaling listeners ──────────────────────────────────
+
+socket.on('stream-start-ok', (data) => {
+    if (streamState.role !== 'streamer' || data.gid !== streamState.gid) return;
+    const chat = state.chats[data.gid];
+    if (chat) { chat.isLive = true; chat.liveStreamer = state.username; renderChatList(); renderHeader(); }
+});
+
+socket.on('stream-error', (data) => {
+    toast(data.error === 'already_live' ? 'В этой группе уже идёт трансляция' : 'Не удалось начать трансляцию', 'error');
+    if (streamState.gid === data.gid) teardownStream();
+});
+
+socket.on('stream-started', (data) => {
+    const chat = state.chats[data.gid];
+    if (!chat) return;
+    chat.isLive = true;
+    chat.liveStreamer = data.from;
+    if (state.currentChat?.id === data.gid) {
+        addMessage(data.gid, { system: true, text: `${data.from} начал(а) трансляцию`, ts: Date.now() });
+        renderMessages();
+    }
+    renderChatList();
+    renderHeader();
+    toast(`${data.from} начал(а) трансляцию в «${chat.name}»`, 'info');
+});
+
+socket.on('stream-viewer-joined', (data) => {
+    if (streamState.role !== 'streamer' || data.gid !== streamState.gid) return;
+    const pc = createStreamPeer(data.viewer, true);
+    pc.createOffer()
+        .then(offer => pc.setLocalDescription(offer).then(() => offer))
+        .then(offer => socket.emit('stream-offer', { gid: data.gid, to: data.viewer, offer: pc.localDescription }))
+        .catch(e => console.error('stream-offer creation failed:', e));
+});
+
+socket.on('stream-offer', async (data) => {
+    if (streamState.role !== 'viewer' || data.gid !== streamState.gid) return;
+    const pc = createStreamPeer(data.from, false);
+    try {
+        await setStreamRemoteDescription(data.from, pc, new RTCSessionDescription(data.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('stream-answer', { gid: data.gid, to: data.from, answer: pc.localDescription });
+    } catch (e) {
+        console.error('stream-offer handling failed:', e);
+    }
+});
+
+socket.on('stream-answer', async (data) => {
+    const pc = streamState.peers[data.from];
+    if (!pc) return;
+    try { await setStreamRemoteDescription(data.from, pc, new RTCSessionDescription(data.answer)); }
+    catch (e) { console.error('stream-answer handling failed:', e); }
+});
+
+socket.on('stream-ice', async (data) => {
+    const pc = streamState.peers[data.from];
+    if (!pc) return;
+    if (!streamState.remoteDescSet[data.from]) {
+        streamState.iceQueues[data.from].push(data.candidate);
+        return;
+    }
+    try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }
+    catch (e) { console.error('stream ICE add failed:', e); }
+});
+
+socket.on('stream-viewer-left', (data) => {
+    if (streamState.role !== 'streamer' || data.gid !== streamState.gid) return;
+    cleanupStreamPeer(data.viewer);
+});
+
+socket.on('stream-viewer-count', (data) => {
+    if (data.gid !== streamState.gid) return;
+    $streamViewerCount.textContent = String(data.count);
+});
+
+socket.on('stream-chat', (data) => {
+    if (data.gid !== streamState.gid) return;
+    renderStreamChatLine(data.from, data.text);
+});
+
+socket.on('stream-ended', (data) => {
+    const chat = state.chats[data.gid];
+    if (chat) { chat.isLive = false; chat.liveStreamer = null; renderChatList(); renderHeader(); }
+    if (streamState.gid === data.gid) {
+        toast('Трансляция завершена', 'info');
+        teardownStream();
+    }
+});
+
+async function refreshActiveStreams() {
+    try {
+        const res = await fetch('/api/streams/active').then(r => r.json());
+        if (!res.ok) return;
+        let changed = false;
+        for (const [gid, chat] of Object.entries(state.chats)) {
+            if (chat.type !== 'group') continue;
+            const info = res.streams[gid];
+            const wasLive = !!chat.isLive;
+            chat.isLive = !!info;
+            chat.liveStreamer = info ? info.streamer : null;
+            if (wasLive !== chat.isLive) changed = true;
+        }
+        if (changed) { renderChatList(); renderHeader(); }
+    } catch (e) {}
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // Notifications: sound (Web Audio) + vibration
@@ -5030,6 +5324,7 @@ socket.on('disconnect', () => {
 socket.on('connect', () => {
     isConnected = true;
     updateConnectionStatus();
+    refreshActiveStreams();
 });
 
 function updateConnectionStatus() {
