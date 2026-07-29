@@ -3154,8 +3154,8 @@ function wireSettingsSection(id, root, overlay) {
         });
     }
     if (id === 'privacy') {
-        byId('logout-all')?.addEventListener('click', () => {
-            if (confirm('Выйти из аккаунта?')) doLogout();
+        byId('logout-all')?.addEventListener('click', async () => {
+            if (await confirmModal('Выйти из аккаунта?')) doLogout();
         });
     }
     if (id === 'security' && !state.isAnon) {
@@ -3191,7 +3191,7 @@ function wireSettingsSection(id, root, overlay) {
                     removeBtn.className = 'btn btn-danger';
                     removeBtn.textContent = 'Удалить';
                     removeBtn.addEventListener('click', async () => {
-                        if (!confirm('Удалить этот passkey?')) return;
+                        if (!await confirmModal('Удалить этот passkey?', { danger: true })) return;
                         await fetch('/api/webauthn/credentials/remove', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -3240,7 +3240,7 @@ function wireSettingsSection(id, root, overlay) {
         };
         renderBackupStatus();
         byId('regen-backup-codes')?.addEventListener('click', async () => {
-            if (!confirm('Сгенерировать новый набор запасных кодов? Старые (даже неиспользованные) перестанут работать.')) return;
+            if (!await confirmModal('Сгенерировать новый набор запасных кодов? Старые (даже неиспользованные) перестанут работать.')) return;
             try {
                 const res = await fetch('/api/webauthn/backup-codes/generate', { method: 'POST' }).then(r => r.json());
                 if (!res.ok) { toast(res.error || 'Не удалось создать коды', 'error'); return; }
@@ -3268,7 +3268,7 @@ function wireSettingsSection(id, root, overlay) {
             const warn = already
                 ? 'Создать новый код восстановления? Старый (даже неиспользованный) перестанет работать.'
                 : 'Создать код восстановления? Он единственный способ вернуть доступ, если вы забудете пароль — сохраните его в надёжном месте, отдельно от этого устройства.';
-            if (!confirm(warn)) return;
+            if (!await confirmModal(warn)) return;
             try {
                 const res = await fetch('/api/recovery/generate', { method: 'POST' }).then(r => r.json());
                 if (!res.ok) { toast(res.error || 'Не удалось создать код', 'error'); return; }
@@ -3280,8 +3280,8 @@ function wireSettingsSection(id, root, overlay) {
         });
     }
     if (id === 'chats') {
-        byId('clear-history')?.addEventListener('click', () => {
-            if (!confirm('Удалить все локальные сообщения?')) return;
+        byId('clear-history')?.addEventListener('click', async () => {
+            if (!await confirmModal('Удалить все локальные сообщения?', { danger: true })) return;
             for (const cid in state.chats) state.chats[cid].messages = [];
             saveState();
             renderChatList();
@@ -3298,8 +3298,8 @@ function wireSettingsSection(id, root, overlay) {
         });
     }
     if (id === 'data') {
-        byId('reset-storage')?.addEventListener('click', () => {
-            if (!confirm('Удалить все локальные данные и настройки?')) return;
+        byId('reset-storage')?.addEventListener('click', async () => {
+            if (!await confirmModal('Удалить все локальные данные и настройки?', { danger: true })) return;
             localStorage.clear();
             location.reload();
         });
@@ -3308,7 +3308,7 @@ function wireSettingsSection(id, root, overlay) {
             const sw = e.currentTarget;
             if (isEncEnabled()) {
                 // Disable
-                if (!confirm('Отключить шифрование? История будет храниться в открытом виде.')) return;
+                if (!await confirmModal('Отключить шифрование? История будет храниться в открытом виде.', { danger: true })) return;
                 await disableEncryption();
                 sw.classList.remove('on');
                 toast('Шифрование отключено', 'success');
@@ -4072,6 +4072,42 @@ function ctxEdit() {
     if (ctxTargetMsg.voice || ctxTargetMsg.file || ctxTargetMsg.videoMsg) { toast(t('edit_text_only') || 'Можно менять только текстовые сообщения', 'info'); hideContextMenu(); return; }
     startEdit(ctxTargetMsg, ctxTargetPane || paneA);
     hideContextMenu();
+}
+
+// Styled replacement for window.confirm() — matches the app's glassmorphism
+// modal language instead of dropping the user into a native browser dialog.
+// Resolves true/false instead of blocking the thread, so every call site
+// becomes `if (await confirmModal(...))` in place of `if (confirm(...))`.
+function confirmModal(text, { danger = false, confirmLabel } = {}) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML = `
+            <div class="modal" style="max-width:380px">
+                <p style="margin-bottom:20px;line-height:1.5">${esc(text)}</p>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="confirm-modal-cancel">${t('cancel')}</button>
+                    <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="confirm-modal-ok">${esc(confirmLabel || t('ok'))}</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const finish = (result) => {
+            document.removeEventListener('keydown', onKeydown);
+            overlay.remove();
+            resolve(result);
+        };
+        const onKeydown = (e) => {
+            if (e.key === 'Escape') finish(false);
+            else if (e.key === 'Enter') finish(true);
+        };
+        overlay.onclick = (e) => { if (e.target === overlay) finish(false); };
+        overlay.querySelector('#confirm-modal-cancel').onclick = () => finish(false);
+        overlay.querySelector('#confirm-modal-ok').onclick = () => finish(true);
+        document.addEventListener('keydown', onKeydown);
+        overlay.querySelector('#confirm-modal-ok').focus();
+    });
 }
 
 function ctxForward() {
@@ -4849,7 +4885,7 @@ async function showGroupMembers() {
         });
     });
     overlay.querySelector('#leave-group-btn')?.addEventListener('click', async () => {
-        if (!confirm('Покинуть эту группу?')) return;
+        if (!await confirmModal('Покинуть эту группу?')) return;
         try {
             const res = await fetch('/api/groups/leave', {
                 method: 'POST',
