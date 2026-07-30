@@ -41,7 +41,7 @@ import webpush
 from transport import UDPTransport, DoHTransport, MultiTransport
 from protocol import (
     CMD_REGISTER, CMD_GETKEY, CMD_SEND, CMD_POLL,
-    CMD_GROUP_CREATE, CMD_GROUP_INVITE, CMD_GROUP_SEND,
+    CMD_GROUP_CREATE, CMD_GROUP_INVITE, CMD_GROUP_INVITE_CHUNKED, CMD_GROUP_SEND,
     CMD_GROUP_POLL, CMD_GROUP_LIST, CMD_GROUP_LEAVE, CMD_GROUP_KICK,
     CMD_GROUP_MEMBERS,
     CMD_FILE_HEADER, CMD_FILE_CHUNK, CMD_FILE_POLL, CMD_FILE_DOWNLOAD,
@@ -1160,10 +1160,29 @@ class UserMessenger:
         # добавила бы только избыточность, а не новую гарантию.
         invite_sig = self.identity.sign(
             ginvite_signing_input(gid, self.username, user))
-        labels = [CMD_GROUP_INVITE, gid, self.username, user] + chunk_string(
-            b32encode(invite_sig) + b32encode(sealed), MAX_LABEL_LEN)
-        ok = self._q(labels).startswith('OK')
-        return {'ok': ok, 'error': '' if ok else 'Error'}
+        # sig(103) + sealed(96) + фикс-лейблы (i/gid/inviter/invited/nonce/
+        # msg.tunnel.local) при длинных именах перевешивают 253-символьный
+        # qname и dnslib падает DNSLabelError ещё до отправки (одноразовая
+        # форма 'i' сохранена как легаси, см. regressions в tests/
+        # test_ginvite_long_labels.py). Режем нагрузку на чанки, как делает
+        # CMD_GROUP_SEND, и релей собирает её в _h_ginvite_chunked.
+        payload = b32encode(invite_sig) + b32encode(sealed)
+        mid = gen_msg_id()
+        prefix = [gid, self.username, user, mid]
+        overhead = '.'.join([CMD_GROUP_INVITE_CHUNKED] + prefix + ['00', '00', ''])
+        avail = MAX_DOMAIN_LEN - len(overhead) - len(self.transport.domain) - 2 - NONCE_OVERHEAD
+        per_q = max(MAX_LABEL_LEN, (avail // (MAX_LABEL_LEN + 1)) * MAX_LABEL_LEN)
+        chunks = chunk_string(payload, per_q) if payload else ['']
+        total = len(chunks)
+        for seq, chunk in enumerate(chunks):
+            labels = ([CMD_GROUP_INVITE_CHUNKED] + prefix + [str(seq), str(total)]
+                      + chunk_string(chunk, MAX_LABEL_LEN))
+            # Идемпотентно по (inviter, gid, invited, mid) — повтор одного и
+            # того же чанка релей просто квитирует, как в _send_chunked.
+            res = self._q_reliable(labels)
+            if res.startswith('ERR'):
+                return {'ok': False, 'error': res}
+        return {'ok': True, 'error': ''}
 
     def send_group(self, gid: str, text: str) -> bool:
         gk = self.group_keys.get(gid)

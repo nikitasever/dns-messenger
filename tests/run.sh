@@ -29,6 +29,10 @@ echo "== Python group impersonation integration test =="
 python tests/test_group_auth.py
 
 echo
+echo "== Python group invite long-labels (qname overflow) test =="
+python tests/test_ginvite_long_labels.py
+
+echo
 echo "== Python group leave/kick + re-key integration test =="
 python tests/test_group_rekey.py
 

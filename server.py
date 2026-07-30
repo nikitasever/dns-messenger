@@ -21,7 +21,7 @@ DOWNLOAD_PIECE = 1400
 
 from protocol import (
     CMD_REGISTER, CMD_GETKEY, CMD_SEND, CMD_POLL,
-    CMD_GROUP_CREATE, CMD_GROUP_INVITE, CMD_GROUP_SEND,
+    CMD_GROUP_CREATE, CMD_GROUP_INVITE, CMD_GROUP_INVITE_CHUNKED, CMD_GROUP_SEND,
     CMD_GROUP_POLL, CMD_GROUP_LIST, CMD_GROUP_LEAVE, CMD_GROUP_KICK,
     CMD_GROUP_MEMBERS,
     CMD_FILE_HEADER, CMD_FILE_CHUNK, CMD_FILE_POLL, CMD_FILE_DOWNLOAD,
@@ -137,6 +137,13 @@ class RelayServer:
         # public_key не влезает в один DNS-запрос, шлётся по чанкам через
         # несколько. user → ({seq: chunk}, last_seen_ts).
         self._diskreg_pending: dict[str, tuple[dict, float]] = {}
+
+        # Незавершённая сборка chunked-invite ('j') — та же причина, что и у
+        # _diskreg_pending: sig+sealed вместе с фикс-лейблами (gid, inviter,
+        # invited) не влезают в один qname при длинных именах. Ключ включает
+        # (inviter, gid, invited, mid) — чужой отправитель не может влезть в
+        # чужую сборку и pinned-подпись всё равно проверяется в конце.
+        self._ginvite_pending: dict[str, tuple[dict, int, float]] = {}
 
     # ═══════════════════════════════════════════════════════════════════
     # Личные сообщения
@@ -328,6 +335,9 @@ class RelayServer:
         if len(L) < 4:
             return 'ERR:bad_ginvite'
         gid, inviter, user = L[0], L[1], L[2]
+        return self._apply_ginvite(gid, inviter, user, ''.join(L[3:]))
+
+    def _apply_ginvite(self, gid: str, inviter: str, user: str, rest: str) -> str:
         with self.lock:
             inviter_entry = self.users.get(inviter)
         if inviter_entry and inviter_entry.get('pinned'):
@@ -335,7 +345,6 @@ class RelayServer:
             # ключом — требуем подпись, иначе релей мог бы приписать invite
             # ЛЮБОМУ существующему участнику, не владея его ключом, и раздуть
             # grp['members'] произвольными именами (см. crypto_utils.ginvite_signing_input).
-            rest = ''.join(L[3:])
             sig_b32, enc_key_b32 = rest[:BUNDLE_B32_LEN], rest[BUNDLE_B32_LEN:]
             try:
                 sig = b32decode(sig_b32)
@@ -346,7 +355,7 @@ class RelayServer:
                     ed_pub, ginvite_signing_input(gid, inviter, user), sig)):
                 return 'ERR:auth'
         else:
-            enc_key_b32 = ''.join(L[3:])
+            enc_key_b32 = rest
         with self.lock:
             grp = self.groups.get(gid)
             if not grp:
@@ -357,6 +366,46 @@ class RelayServer:
             grp['keys'][user] = {'data': enc_key_b32, 'from_user': inviter}
         print(f'[G+] {inviter} invited {user} to {gid}')
         return f'OK:invited:{user}'
+
+    def _h_ginvite_chunked(self, L: list[str]) -> str:
+        # j.<group>.<inviter>.<user>.<mid>.<seq>.<total>.<chunk_b32…>
+        # См. CMD_GROUP_INVITE_CHUNKED в protocol.py — при длинных именах
+        # sig+sealed вместе с фикс-лейблами перевешивают 253-символьный
+        # qname и dnslib отбрасывает такой запрос ещё до отправки.
+        if len(L) < 7:
+            return 'ERR:bad_ginvite'
+        gid, inviter, user, mid = L[0], L[1], L[2], L[3]
+        try:
+            seq, total = int(L[4]), int(L[5])
+        except ValueError:
+            return 'ERR:bad_ginvite'
+        if total < 1 or total > MAX_MSG_CHUNKS or seq < 0 or seq >= total:
+            return 'ERR:bad_ginvite'
+        chunk = ''.join(L[6:])
+        key = f'{inviter}:{gid}:{user}:{mid}'
+        with self.lock:
+            existing = self._ginvite_pending.get(key)
+            if existing is None:
+                if len(self._ginvite_pending) >= MAX_INCOMPLETE:
+                    oldest = min(
+                        self._ginvite_pending,
+                        key=lambda k: self._ginvite_pending[k][2])
+                    self._ginvite_pending.pop(oldest, None)
+                chunks: dict[int, str] = {}
+            else:
+                chunks, prev_total, _ts = existing
+                # Тот же mid, но другой total — попытка инъекции чанка в
+                # чужую сборку (mid включает inviter/gid/user, но total
+                # всё равно фиксируем). Не смешиваем.
+                if prev_total != total:
+                    return 'ERR:mid_conflict'
+            chunks[seq] = chunk
+            self._ginvite_pending[key] = (chunks, total, time.time())
+            if len(chunks) < total:
+                return f'OK:chunk:{seq}/{total}'
+            full = ''.join(chunks[i] for i in range(total))
+            self._ginvite_pending.pop(key, None)
+        return self._apply_ginvite(gid, inviter, user, full)
 
     def _h_gsend(self, L: list[str]) -> str:
         # g.<group>.<from>.<id>.<seq>.<total>.<data…>
@@ -818,6 +867,12 @@ class RelayServer:
             for u in stale_dr:
                 del self._diskreg_pending[u]
 
+            # 5. Незавершённая сборка chunked-invite — та же ASSEMBLY_TTL.
+            stale_gi = [k for k, (_c, _t, ts) in self._ginvite_pending.items()
+                        if now - ts > ASSEMBLY_TTL]
+            for k in stale_gi:
+                del self._ginvite_pending[k]
+
     def _assemble(self, mid, seq, total, data_b32, fr_u, dest,
                   chunks_store, meta_store, mail_store, is_group=False):
         """Собирает чанки сообщения и кладёт в почтовый ящик.
@@ -883,6 +938,7 @@ class RelayServer:
         CMD_POLL:          '_h_poll',
         CMD_GROUP_CREATE:  '_h_gcreate',
         CMD_GROUP_INVITE:  '_h_ginvite',
+        CMD_GROUP_INVITE_CHUNKED: '_h_ginvite_chunked',
         CMD_GROUP_SEND:    '_h_gsend',
         CMD_GROUP_POLL:    '_h_gpoll',
         CMD_GROUP_LIST:    '_h_glist',

@@ -57,6 +57,12 @@ CMD_POLL     = 'p'
 # Группы
 CMD_GROUP_CREATE  = 'c'
 CMD_GROUP_INVITE  = 'i'
+# Многоресурсный invite: sig(103) + sealed(96) + фикс-лейблы (i/gid/inviter/
+# invited/nonce/msg.tunnel.local) + разделители при длинных именах/gid
+# перевешивают 253-символьный лимит qname и dnslib падает ещё до отправки
+# (DNSLabelError). Новая форма 'j' режет полезную нагрузку на чанки, как
+# CMD_GROUP_SEND, и собирается на релее (см. _h_ginvite_chunked).
+CMD_GROUP_INVITE_CHUNKED = 'j'
 CMD_GROUP_SEND    = 'g'
 CMD_GROUP_POLL    = 'q'
 CMD_GROUP_LIST    = 'l'
