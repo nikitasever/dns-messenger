@@ -264,7 +264,12 @@
 
 <!-- ── Call overlay ────────────────────────────────────────────── -->
 <div class="call-overlay" id="call-overlay">
-    <div class="call-bg"></div>
+    <!-- Peer's own avatar colors/photo, blown up + blurred to fill the
+         screen (call-bg), with a dark scrim on top for text contrast —
+         same glassmorphism language as the app's modals, instead of the
+         old static diagonal gradient. -->
+    <div class="call-bg" id="call-bg"></div>
+    <div class="call-bg-scrim"></div>
     <div class="call-content">
         <div class="call-avatar" id="call-avatar"></div>
         <div class="call-name" id="call-name"></div>

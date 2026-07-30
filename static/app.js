@@ -1815,6 +1815,7 @@ let callState = {
 };
 
 const $callOverlay = document.getElementById('call-overlay');
+const $callBg = document.getElementById('call-bg');
 const $callAvatar = document.getElementById('call-avatar');
 const $callName = document.getElementById('call-name');
 const $callStatus = document.getElementById('call-status');
@@ -1826,6 +1827,54 @@ const $remoteAudio = document.getElementById('remote-audio');
 const $callIncoming = document.getElementById('call-incoming');
 const $callActive = document.getElementById('call-active');
 const $callOutgoing = document.getElementById('call-outgoing');
+
+// Draggable local-video PIP — Pointer Events cover mouse + touch alike.
+// Starts bottom-right anchored (CSS); the first drag switches it to
+// left/top so it can move freely, clamped to the call-videos bounds.
+// hideCallUI() clears the inline overrides so every new call starts fresh.
+(function setupDraggablePip() {
+    const el = $localVideo;
+    const container = $callVideos;
+    let dragging = false;
+    let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+
+    el.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        el.classList.add('dragging');
+        el.setPointerCapture(e.pointerId);
+        const rect = el.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        startLeft = rect.left - containerRect.left;
+        startTop = rect.top - containerRect.top;
+        el.style.left = startLeft + 'px';
+        el.style.top = startTop + 'px';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+        startX = e.clientX;
+        startY = e.clientY;
+        e.preventDefault();
+    });
+
+    el.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        const containerRect = container.getBoundingClientRect();
+        const maxLeft = Math.max(0, containerRect.width - el.offsetWidth);
+        const maxTop = Math.max(0, containerRect.height - el.offsetHeight);
+        const newLeft = Math.min(maxLeft, Math.max(0, startLeft + (e.clientX - startX)));
+        const newTop = Math.min(maxTop, Math.max(0, startTop + (e.clientY - startY)));
+        el.style.left = newLeft + 'px';
+        el.style.top = newTop + 'px';
+    });
+
+    const endDrag = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        el.classList.remove('dragging');
+        try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+    };
+    el.addEventListener('pointerup', endDrag);
+    el.addEventListener('pointercancel', endDrag);
+})();
 
 function startCall(video) {
     if (!state.currentChat || state.currentChat.type !== 'dm') {
@@ -1852,6 +1901,13 @@ function showCallUI(peer, video, mode) {
     $callAvatar.style.background = `linear-gradient(135deg,${colors[0]},${colors[1]})`;
     $callAvatar.textContent = peer[0].toUpperCase();
     $callName.textContent = peer;
+
+    // Full-bleed blurred backdrop in the peer's own color (or photo, if they
+    // have one) — .call-bg-scrim (CSS) darkens it for text contrast.
+    const peerPhoto = profilePhotos[peer];
+    $callBg.style.background = peerPhoto
+        ? `url("${peerPhoto}") center/cover`
+        : `radial-gradient(circle at 50% 35%, ${colors[0]}, ${colors[1]} 70%)`;
 
     $callIncoming.style.display = 'none';
     $callActive.style.display = 'none';
@@ -1887,7 +1943,15 @@ function hideCallUI() {
     stopCallTimer();
     stopRingtone();
     if ($remoteVideo) $remoteVideo.srcObject = null;
-    if ($localVideo) $localVideo.srcObject = null;
+    if ($localVideo) {
+        $localVideo.srcObject = null;
+        // Drop it back into its default bottom-right corner for the next call —
+        // dragPip() switches it to left/top-anchored inline styles while live.
+        $localVideo.style.left = '';
+        $localVideo.style.top = '';
+        $localVideo.style.right = '';
+        $localVideo.style.bottom = '';
+    }
     if ($remoteAudio) $remoteAudio.srcObject = null;
 }
 
